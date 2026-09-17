@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### Added
+- **傻瓜式自启 / 自动安装**：探测失败时依次尝试 systemd → 直接启动 → npm 安装 →
+  pkexec 提权安装 → 等待就绪。错误页 (`error.html`) 改为动态显示当前阶段、重试按钮、
+  手动安装命令一键复制
 - README 双语（中/英）
 - 贡献指南与安全策略
 - systemd 用户单元模板（`extra/systemd/`）

@@ -32,4 +32,13 @@ contextBridge.exposeInMainWorld('dshDesktop', {
       ipcRenderer.send('dsh:signal', kind)
     }
   },
+  // 错误页订阅：安装/启动阶段机状态
+  getInstallState: () => ipcRenderer.invoke('dsh:install-state'),
+  onInstallState: (cb) => {
+    const listener = (_e, state) => { if (cb) cb(state) }
+    ipcRenderer.on('dsh:install-state', listener)
+    return () => ipcRenderer.removeListener('dsh:install-state', listener)
+  },
+  // 错误页"重试"
+  retryStart: () => ipcRenderer.invoke('dsh:retry-start'),
 })

@@ -16,17 +16,33 @@ Web GUI (`http://127.0.0.1:3080`). It gives you:
 - 🔐 Self-signed cookie auth — no token to copy
 - 🔄 Auto-update via GitHub Releases
 
-## Prerequisites
+## Startup flow (zero-config)
 
-The desktop client is **a shell only**. You need a running DSH backend:
+After a double-click, the desktop client walks through this state machine automatically:
 
-1. **Recommended**: install from npm and run `dsh web`
+1. Probe `http://127.0.0.1:3080`; if reachable, load the GUI
+2. Not reachable → try `systemctl --user start dsh-web` (if you have the template installed)
+3. Still down → look up `dsh` in `PATH`
+4. No `dsh` → run `npm install -g @deepseek-ai/dsh`; if it fails, retry with `pkexec`
+5. Once installed → run `dsh web`, then poll until the port is ready
+6. All paths exhausted → error page shows manual install commands and the last error,
+   with a one-click "copy" button
+
+**Prerequisites**: `node` + `npm` on PATH. `pkexec` is needed for the privileged install
+attempt (ships with most distros).
+
+## Optional: pre-install manually
+
+You usually don't need to — the desktop will install everything itself. But if you want
+to manage the backend yourself:
+
+1. Install from npm and run `dsh web`
    ```bash
    npm install -g @deepseek-ai/dsh
    dsh web
    ```
-2. **Or**: run `dsh web` from a source-tree build (see upstream `deepseek-ai/deepseek-harness`)
-3. **Or**: keep it running under a systemd user service (template in `extra/systemd/dsh-web.service`)
+2. Or run from a source-tree build (see upstream `deepseek-ai/deepseek-harness`)
+3. Or keep it under a systemd user service (template in `extra/systemd/dsh-web.service`)
 
 **Before first launch** make sure `dsh web` has been started at least once — it writes the
 browser-session secret to `~/.dsh/.credentials.yaml`, which the desktop app needs for

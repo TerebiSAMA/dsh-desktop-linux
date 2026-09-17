@@ -16,17 +16,31 @@ Web GUI 的 Electron 桌面壳。它把 DSH Web 服务 (`http://127.0.0.1:3080`)
 - 🔐 自动认证：免 token 打开 DSH Web（自签名 cookie）
 - 🔄 自动更新：检测 GitHub Releases 后台静默升级
 
-## 前置条件
+## 启动流程（傻瓜式）
 
-桌面端只是壳，**必须有一个能跑的 DSH 后端**。三种方式：
+双击图标后，桌面端会按下面顺序自动把一切准备好：
 
-1. **推荐**：从 npm 安装并跑 `dsh web`
+1. 探测 `http://127.0.0.1:3080`，通了就直接进 GUI
+2. 没通 → 试 `systemctl --user start dsh-web`（你装了用户单元的话）
+3. 还起不来 → 在 PATH 里找 `dsh`
+4. 没有 `dsh` → 跑 `npm install -g @deepseek-ai/dsh`（失败会试 `pkexec` 提权安装）
+5. 装好后跑 `dsh web`，轮询等待端口就绪
+6. 都失败 → 错误页显示手动安装步骤和最近错误日志，可以一键复制
+
+**前提**：系统里有 `node` 和 `npm`（提权安装还需要 `pkexec`，多数发行版自带）。
+
+## 可选：预先手动准备
+
+桌面端本身是壳，**但会自动安装和启动后端**，所以通常**不需要**任何手工操作。
+如果你想接管：
+
+1. 从 npm 安装并跑 `dsh web`
    ```bash
    npm install -g @deepseek-ai/dsh
    dsh web
    ```
-2. **或**：从源码树跑 `dsh web`（参考上游 `deepseek-ai/deepseek-harness` 文档）
-3. **或**：用 systemd 用户单元持续托管（见 `extra/systemd/dsh-web.service`）
+2. 或从源码树跑（参考上游 `deepseek-ai/deepseek-harness` 文档）
+3. 或用 systemd 用户单元持续托管（见 `extra/systemd/dsh-web.service`）
 
 **首次启动前**请确保 `dsh web` 至少启动过一次 —— 它会在 `~/.dsh/.credentials.yaml` 里写入
 浏览器会话密钥，桌面端靠它免 token 认证。

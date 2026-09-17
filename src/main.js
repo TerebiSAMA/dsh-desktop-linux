@@ -187,19 +187,155 @@ function probe(cb) {
   req.on('timeout', () => { req.destroy(); cb(false) })
 }
 
-function startService() {
-  // 1) 优先复用 systemd 用户单元（推荐：随登录自启 + 失败重启）
-  execFile('systemctl', ['--user', 'start', SERVICE], (err) => {
-    if (!err) return
-    // 2) 兜底：直接在 PATH 里找 `dsh` 起一个 detached 进程。
-    //    单元缺失或 systemctl 不可用时（例如非 systemd 发行版）的备用方案。
-    try {
-      const child = execFile('dsh', ['web'], { detached: true, stdio: 'ignore' })
-      child.unref()
-    } catch (e) {
-      notify('DSH Desktop', `未能启动 ${SERVICE} 服务：${err.message || err}`)
-    }
+function probeOnce() {
+  return new Promise((resolve) => {
+    probe((ok) => resolve(ok))
   })
+}
+
+/** 查命令是否在 PATH。 */
+function which(cmd) {
+  return new Promise((resolve) => {
+    execFile('which', [cmd], (err, stdout) => {
+      resolve(!err && stdout.toString().trim().length > 0)
+    })
+  })
+}
+
+// ---------- 服务自启 / 安装阶段机 ----------
+// 状态广播给错误页（src/error.html），让用户看到当前正在做什么。
+// 阶段：idle → starting-systemd → starting-direct → checking-cli
+//      → installing → installing-priv → waiting → ready / failed
+let installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
+const setInstallState = (patch) => {
+  installState = { ...installState, ...patch, startedAt: installState.startedAt || Date.now() }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('dsh:install-state', installState)
+  }
+  notify('DSH Desktop', installState.message || installState.phase)
+}
+
+const MANUAL_INSTALL_STEPS = [
+  '# 推荐：官方 npm 包',
+  'npm install -g @deepseek-ai/dsh',
+  '',
+  '# 或 pnpm',
+  'pnpm add -g @deepseek-ai/dsh',
+  '',
+  '# 或 yarn',
+  'yarn global add @deepseek-ai/dsh',
+  '',
+  '# 装完手动起服务',
+  'dsh web',
+]
+
+/** 阶段机入口：依次尝试 systemd → 直接启动 → 安装 → 提权安装。 */
+function startOrInstall() {
+  setInstallState({ phase: 'starting-systemd', message: `正在启动 ${SERVICE} 服务…` })
+  execFile('systemctl', ['--user', 'start', SERVICE], (sysErr) => {
+    if (!sysErr) {
+      setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
+      return waitForServiceReady()
+    }
+    startOrInstall_direct()
+  })
+}
+
+function startOrInstall_direct() {
+  setInstallState({ phase: 'checking-cli', message: '查找 dsh 命令…' })
+  which('dsh').then((found) => {
+    if (found) {
+      setInstallState({ phase: 'starting-direct', message: '直接启动 dsh web…' })
+      const child = execFile('dsh', ['web'], { detached: true, stdio: 'ignore' })
+      child.on('error', (err) => {
+        setInstallState({
+          phase: 'failed',
+          message: 'dsh 命令已存在但启动失败',
+          lastError: String(err && err.message || err),
+          manualSteps: MANUAL_INSTALL_STEPS,
+        })
+      })
+      child.unref()
+      setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
+      return waitForServiceReady()
+    }
+    startOrInstall_install(false)
+  })
+}
+
+function startOrInstall_install(usePriv) {
+  const phase = usePriv ? 'installing-priv' : 'installing'
+  const cmd = usePriv ? 'pkexec' : 'npm'
+  const args = usePriv
+    ? ['npm', 'install', '-g', '@deepseek-ai/dsh']
+    : ['install', '-g', '@deepseek-ai/dsh']
+  setInstallState({
+    phase,
+    message: usePriv ? '需要管理员权限，正在安装 dsh…' : '正在通过 npm 安装 dsh…',
+  })
+
+  const child = execFile(cmd, args, { env: { ...process.env, NPM_CONFIG_FUND: 'false' } })
+  let stderrBuf = ''
+  child.stderr.on('data', (b) => { stderrBuf += b.toString() })
+  child.on('error', (err) => {
+    // pkexec 不存在 / 取消授权等
+    if (!usePriv) {
+      // 试一次提权安装
+      return startOrInstall_install(true)
+    }
+    setInstallState({
+      phase: 'failed',
+      message: '自动安装失败',
+      lastError: String(err && err.message || err),
+      manualSteps: MANUAL_INSTALL_STEPS,
+    })
+  })
+  child.on('close', (code) => {
+    if (code === 0) {
+      setInstallState({ phase: 'starting-direct', message: '安装完成，启动服务…' })
+      const web = execFile('dsh', ['web'], { detached: true, stdio: 'ignore' })
+      web.unref()
+      setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
+      return waitForServiceReady()
+    }
+    // npm 失败（通常是 EACCES / 权限不足）
+    if (!usePriv) {
+      return startOrInstall_install(true)
+    }
+    setInstallState({
+      phase: 'failed',
+      message: '自动安装失败（提权安装仍失败）',
+      lastError: stderrBuf.split('\n').filter(Boolean).slice(-3).join('\n'),
+      manualSteps: MANUAL_INSTALL_STEPS,
+    })
+  })
+}
+
+/** 周期性探测，直到服务通或超过 WAIT_TIMEOUT_MS。 */
+const WAIT_TIMEOUT_MS = 60_000
+const WAIT_INTERVAL_MS = 1500
+function waitForServiceReady() {
+  const start = Date.now()
+  const tick = () => {
+    probeOnce().then((ok) => {
+      if (ok) {
+        setInstallState({ phase: 'ready', message: '服务已就绪' })
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GUI_URL)
+        return
+      }
+      if (Date.now() - start >= WAIT_TIMEOUT_MS) {
+        setInstallState({
+          phase: 'failed',
+          message: '服务启动超时',
+          lastError: `${WAIT_TIMEOUT_MS / 1000}s 内未收到响应`,
+          manualSteps: MANUAL_INSTALL_STEPS,
+        })
+        return
+      }
+      setTimeout(tick, WAIT_INTERVAL_MS)
+    })
+  }
+  setTimeout(tick, WAIT_INTERVAL_MS)
 }
 
 function notify(title, body) {
@@ -258,10 +394,19 @@ function createWindow() {
     if (url.startsWith('http')) shell.openExternal(url)
   })
 
-  // 加载失败（服务没起）→ 加载本地错误页
+  // 加载失败（服务没起）→ 加载本地错误页，并保证错误页能拿到最新状态
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
     if (code === -3) return // ERR_ABORTED 忽略
     if (!mainWindow) return
+    if (installState.phase === 'idle') {
+      // GUI URL 直接崩了（不是启动场景）。给错误页一个明确状态。
+      setInstallState({
+        phase: 'failed',
+        message: '服务连接失败',
+        lastError: `did-fail-load: ${desc || code}`,
+        manualSteps: MANUAL_INSTALL_STEPS,
+      })
+    }
     mainWindow.loadFile(join(__dirname, 'error.html'))
   })
 
@@ -272,23 +417,16 @@ function createWindow() {
     if (ok) {
       mainWindow.loadURL(GUI_URL)
     } else {
-      startService()
-      // 等就绪，最多 25 秒
-      let tries = 0
-      const timer = setInterval(() => {
-        tries++
-        probe((ok2) => {
-          if (ok2) {
-            clearInterval(timer)
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GUI_URL)
-          } else if (tries >= 25) {
-            clearInterval(timer)
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.loadFile(join(__dirname, 'error.html'))
-            }
-          }
-        })
-      }, 1000)
+      // 阶段机：systemd → 直接启动 → 安装（必要时提权）→ 等待就绪。
+      // 失败时错误页会显示手动安装步骤与失败摘要。
+      startOrInstall()
+      // 先把状态缓存到 mainWindow.webContents，错误页加载后即可读取
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('dsh:install-state', installState)
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadFile(join(__dirname, 'error.html'))
+      }
     }
   })
 }
@@ -308,14 +446,14 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: '打开 DSH Desktop', click: showWindow },
     { label: '重启 Harness 服务', click: () => {
+        notify('DSH Desktop', '正在重启 Harness 服务…')
+        // 先重置状态，避免显示上次的成功/失败文案
+        installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
         execFile('systemctl', ['--user', 'restart', SERVICE], () => {
-          notify('DSH Desktop', '正在重启 Harness 服务…')
-          setTimeout(() => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              installBrowserAuth(mainWindow.webContents.session)
-              mainWindow.loadURL(GUI_URL)
-            }
-          }, 1500)
+          setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
+          waitForServiceReady()
+          // 顺便刷新 cookie（服务重启通常不需要，但密钥若被外部重置就保险）
+          installBrowserAuth(mainWindow.webContents.session)
         })
       } },
     { type: 'separator' },
@@ -358,6 +496,14 @@ X-KDE-autostart-phase=1
 ipcMain.handle('dsh:version', () => app.getVersion())
 ipcMain.handle('dsh:open-external', (_e, url) => {
   if (typeof url === 'string' && url.startsWith('http')) shell.openExternal(url)
+})
+// 错误页订阅安装/启动阶段；state 是 main 当前快照
+ipcMain.handle('dsh:install-state', () => installState)
+// 错误页"重试"按钮：再走一次完整阶段机
+ipcMain.handle('dsh:retry-start', () => {
+  installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
+  startOrInstall()
+  return true
 })
 // 任务状态信号：Web GUI 检测到完成/提问/失败时驱动托盘光条。
 ipcMain.on('dsh:signal', (_e, kind) => {

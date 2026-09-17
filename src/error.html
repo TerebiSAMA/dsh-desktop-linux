@@ -2,32 +2,157 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-  <title>DSH Desktop</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>DSH Desktop — 启动中</title>
   <style>
     body {
       margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
-      background: #0d1117; color: #c9d1d9; font-family: system-ui, sans-serif;
+      background: #0d1117; color: #c9d1d9; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     }
-    .card { text-align: center; max-width: 460px; padding: 40px; }
-    h1 { font-size: 20px; margin-bottom: 12px; color: #4d6bfe; }
+    .card {
+      text-align: center; max-width: 540px; padding: 36px;
+    }
+    h1 { font-size: 20px; margin: 0 0 8px; color: #4d6bfe; }
     p { font-size: 14px; line-height: 1.7; color: #8b949e; margin: 6px 0; }
+    code, kbd {
+      background: #161b22; padding: 2px 6px; border-radius: 4px; font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+    }
+    .row { display: flex; gap: 12px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
     .btn {
-      display: inline-block; margin-top: 20px; padding: 10px 24px;
+      display: inline-block; padding: 10px 22px;
       background: #4d6bfe; color: #fff; border: 0; border-radius: 8px;
       font-size: 14px; cursor: pointer; text-decoration: none;
     }
     .btn:hover { background: #3b55e0; }
-    code { background: #161b22; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .btn.secondary { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
+    .btn.secondary:hover { background: #30363d; }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid #4d6bfe; border-top-color: transparent;
+      border-radius: 50%; animation: spin 0.9s linear infinite;
+      vertical-align: middle; margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    pre {
+      background: #161b22; padding: 12px; border-radius: 6px;
+      text-align: left; font-size: 12px; line-height: 1.55;
+      overflow-x: auto; color: #c9d1d9;
+    }
+    .muted { color: #6e7681; font-size: 12px; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; margin-right: 6px;
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    }
+    .badge.busy { background: #1f6feb33; border-color: #1f6feb; color: #58a6ff; }
+    .badge.fail { background: #da363333; border-color: #da3633; color: #f85149; }
+    .badge.ok   { background: #2ea04333; border-color: #2ea043; color: #56d364; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>DSH Desktop</h1>
-    <p>未能连接到 DeepSeek Harness Web 服务。</p>
-    <p>服务地址：<code>http://127.0.0.1:3080</code></p>
-    <p>请确认服务已启动：<code>systemctl --user status dsh-web</code></p>
-    <a class="btn" href="#" onclick="location.reload()">重试</a>
+    <p>
+      <span id="badge" class="badge busy">启动中</span>
+      <span id="phase-text">正在连接服务…</span>
+    </p>
+
+    <div id="working">
+      <p><span class="spinner"></span><span id="action-text">等待主进程响应…</span></p>
+    </div>
+
+    <div id="failed" style="display:none;">
+      <p>自动启动失败。你可以重试，或按下面的命令手动安装 / 启动：</p>
+      <pre id="manual-steps"></pre>
+      <p id="last-error-wrap" class="muted" style="display:none;">
+        最近错误：<br><code id="last-error"></code>
+      </p>
+    </div>
+
+    <div class="row">
+      <button id="retry-btn" class="btn">重试</button>
+      <button id="copy-btn" class="btn secondary" style="display:none;">复制安装命令</button>
+    </div>
+
+    <p class="muted">服务地址：<code>http://127.0.0.1:3080</code></p>
   </div>
+
+  <script>
+    'use strict';
+    // 阶段文案（与 main.js installState.phase 对应）
+    const PHASE_TEXT = {
+      'starting-systemd': '正在通过 systemd 启动 dsh-web 服务…',
+      'starting-direct':   '正在直接启动 dsh web…',
+      'checking-cli':      '正在查找 dsh 命令…',
+      'installing':        '正在通过 npm 安装 dsh（首次安装约需 30 秒）…',
+      'installing-priv':   '需要管理员权限，正在弹窗授权安装…',
+      'waiting':           '服务进程已启动，等待端口就绪…',
+      'ready':             '服务已就绪，正在打开界面…',
+      'failed':            '自动启动失败',
+    };
+    const $ = (id) => document.getElementById(id);
+    let lastSteps = [];
+
+    function render(state) {
+      const phase = state.phase || 'idle';
+      const phaseText = PHASE_TEXT[phase] || state.message || phase;
+      $('phase-text').textContent = state.message || phaseText;
+      $('action-text').textContent = state.message || phaseText;
+
+      const badge = $('badge');
+      badge.className = 'badge';
+      if (phase === 'ready')        badge.classList.add('ok');   badge.textContent = '已就绪';
+      else if (phase === 'failed')  badge.classList.add('fail'); badge.textContent = '失败';
+      else                            badge.classList.add('busy'); badge.textContent = '启动中';
+
+      const isFailed = phase === 'failed';
+      $('working').style.display   = isFailed ? 'none' : '';
+      $('failed').style.display    = isFailed ? '' : 'none';
+
+      if (isFailed) {
+        lastSteps = state.manualSteps || [];
+        $('manual-steps').textContent = lastSteps.join('\n');
+        if (state.lastError) {
+          $('last-error-wrap').style.display = '';
+          $('last-error').textContent = state.lastError;
+        } else {
+          $('last-error-wrap').style.display = 'none';
+        }
+        $('copy-btn').style.display = lastSteps.length ? '' : 'none';
+      }
+    }
+
+    async function copySteps() {
+      if (!lastSteps.length) return;
+      try {
+        await navigator.clipboard.writeText(lastSteps.join('\n'));
+        $('copy-btn').textContent = '已复制 ✓';
+        setTimeout(() => { $('copy-btn').textContent = '复制安装命令'; }, 1500);
+      } catch (e) {
+        // clipboard 可能没权限（HTTP 不可用），静默
+      }
+    }
+
+    $('retry-btn').addEventListener('click', () => {
+      // 切回 busy 显示
+      $('badge').className = 'badge busy';
+      $('badge').textContent = '启动中';
+      $('working').style.display = '';
+      $('failed').style.display = 'none';
+      $('action-text').textContent = '正在重试…';
+      if (window.dshDesktop && window.dshDesktop.retryStart) window.dshDesktop.retryStart();
+    });
+    $('copy-btn').addEventListener('click', copySteps);
+
+    // 订阅主进程状态
+    if (window.dshDesktop) {
+      window.dshDesktop.getInstallState().then(render);
+      window.dshDesktop.onInstallState(render);
+    } else {
+      // 极端情况：preload 没注入。给个静态提示。
+      $('action-text').textContent = '内部桥接不可用，请重启桌面端。';
+    }
+  </script>
 </body>
 </html>
