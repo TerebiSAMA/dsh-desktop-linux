@@ -11,7 +11,7 @@
  */
 const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification, session } = require('electron')
 const { execFile } = require('node:child_process')
-const { createHash, createHmac } = require('node:crypto')
+const { createHash, createHmac, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs')
 const { join } = require('node:path')
 const os = require('node:os')
@@ -126,13 +126,17 @@ let mainWindow = null
 let tray = null
 let isQuitting = false
 
-// 托盘光条动画状态：askActive 表示“正有会话在等待用户”，暂态闪烁结束后据此
-// 落到常驻的弱黄条（提问）或原图标（其他）。设计克制：短促闪烁 3 下后停。
+// 托盘光条状态：askActive 表示“正有会话在等待用户”；pulseTimer 是运行中
+// 的绿色呼吸动画（鲸鱼下方的绿条淡入淡出）。设计：常驻底部灯槽（base 灰条），
+// 运行中绿条呼吸，完成绿闪，提问黄条常驻，失败红闪。
 const TRAY_BLINK_MS = 320
 const TRAY_BLINK_STEPS = 5 // on off on off on
+const TRAY_PULSE_MS = 250 // 呼吸帧间隔（pulse1..4 循环 ≈ 1s 周期）
 let trayFlashTimer = null
+let trayPulseTimer = null
 let askActive = false
 let trayImages = null
+let stopSessionPolling = null
 
 /** 加载一个托盘帧；缺文件时回退到基础图标（坏安装不崩）。 */
 function loadTrayImage(name) {
@@ -146,7 +150,7 @@ function loadTrayImage(name) {
 
 /** 构造当前皮肤的全套托盘帧缓存（state → nativeImage）。 */
 function buildTrayImages() {
-  const states = ['base', 'done', 'ask', 'askFaint', 'fail']
+  const states = ['base', 'done', 'ask', 'askFaint', 'fail', 'pulse1', 'pulse2', 'pulse3', 'pulse4']
   const out = {}
   for (const s of states) {
     // 主版本（@1x）：createFromPath 会按需自动选 @2x（macOS/某些 Linux 行为不一定；
@@ -188,6 +192,27 @@ function clearFlashTimer() {
   }
 }
 
+// ---------- 运行中绿色呼吸 ----------
+function startPulse() {
+  if (trayPulseTimer !== null) return
+  let i = 0
+  const frames = [trayImages.pulse1, trayImages.pulse2, trayImages.pulse3, trayImages.pulse4]
+  const step = () => {
+    if (!tray || trayPulseTimer === null) return
+    tray.setImage(frames[i % frames.length])
+    i++
+  }
+  step()
+  trayPulseTimer = setInterval(step, TRAY_PULSE_MS)
+}
+
+function stopPulse() {
+  if (trayPulseTimer !== null) {
+    clearInterval(trayPulseTimer)
+    trayPulseTimer = null
+  }
+}
+
 /**
  * Web GUI 任务状态信号 → 托盘光条。
  * @param {string} kind - 'done' | 'ask' | 'fail' | 'clear'
@@ -213,6 +238,122 @@ function traySignal(kind) {
     default:
       break
   }
+}
+
+// ---------- 会话状态轮询（驱动呼吸灯） ----------
+// Web GUI 本身不通知桌面端（官方 DesktopSignal 只在部分构建里接线），
+// 所以桌面端主动轮询 /api/session/list（RPC over POST + 自造认证 cookie），
+// 检测：是否有会话在运行（绿条呼吸）、是否在等用户（黄条）、运行→结束（绿闪）。
+const SESSION_POLL_MS = 2000
+
+/** 发起一个 gateway RPC 调用；服务不可达/无密钥返回 null。 */
+function rpcCall(method, args) {
+  return new Promise((resolve) => {
+    const secret = browserAuthSecret()
+    if (secret === undefined || typeof load !== 'function') return resolve(null)
+    const cookie = mintBrowserCookie(secret, new URL(GUI_URL).host)
+    const body = JSON.stringify({
+      type: 'client-request',
+      rpcId: randomUUID(),
+      method,
+      payload: { args: Object.assign({ _request: {} }, args || {}) },
+    })
+    const req = http.request(new URL(GUI_URL + '/api/' + method), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Cookie: `${cookie.name}=${cookie.value}`,
+      },
+    }, (res) => {
+      let data = ''
+      res.on('data', (c) => { data += c })
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)) } catch (e) { resolve(null) }
+      })
+    })
+    req.on('error', () => resolve(null))
+    req.setTimeout(4000, () => { req.destroy(); resolve(null) })
+    req.write(body)
+    req.end()
+  })
+}
+
+/** 从会话列表提取驱动灯条的摘要：{running, ask}。失败返回 null。 */
+async function fetchSessionState() {
+  const resp = await rpcCall('session/list', {})
+  if (resp === null || resp.result?.ok !== true) return null
+  const items = resp.result.value?.items || []
+  return {
+    running: items.filter((i) => i.running === true).length,
+    ask: items.some((i) => i.pendingInteraction !== undefined),
+  }
+}
+
+// 轮询状态机的历史值
+const sessionPoll = { init: false, running: 0, ask: false }
+
+/**
+ * 每轮轮询根据边沿驱动托盘：
+ *  - 新出现等待用户的会话 → 黄条闪烁后常驻弱黄
+ *  - 从无运行到有运行 → 绿条呼吸
+ *  - 从运行到结束 → 绿闪后回落（若仍在等用户则黄条）
+ *  - 空闲 → 灰条常驻
+ */
+async function sessionPollTick() {
+  if (!tray || trayImages === null) return
+  const st = await fetchSessionState()
+  if (st === null) return // 服务不可达：保持当前显示，等下轮
+
+  const nowAsk = st.ask
+  const nowRunning = st.running > 0
+
+  if (!sessionPoll.init) {
+    sessionPoll.init = true
+    sessionPoll.running = nowRunning
+    sessionPoll.ask = nowAsk
+    if (nowAsk) { askActive = true; tray.setImage(trayImages.askFaint) }
+    else if (nowRunning) startPulse()
+    else tray.setImage(trayImages.base)
+    return
+  }
+
+  const wasAsk = sessionPoll.ask
+  const wasRunning = sessionPoll.running
+
+  // 提问边沿
+  if (nowAsk && !wasAsk) {
+    askActive = true
+    stopPulse()
+    blinkTray(trayImages.ask)
+  } else if (!nowAsk && wasAsk) {
+    askActive = false
+    clearFlashTimer()
+    stopPulse()
+    if (nowRunning) startPulse()
+    else tray.setImage(trayImages.base)
+  }
+
+  // 运行边沿（提问优先：等待用户时呼吸暂停，保持黄条）
+  if (!nowAsk) {
+    if (nowRunning && !wasRunning) {
+      startPulse()
+    } else if (!nowRunning && wasRunning) {
+      stopPulse()
+      blinkTray(trayImages.done) // 完成：绿闪 → 灰条
+    } else if (!nowRunning && !wasRunning) {
+      tray.setImage(trayImages.base)
+    }
+  }
+
+  sessionPoll.running = nowRunning
+  sessionPoll.ask = nowAsk
+}
+
+/** 启动轮询；返回停止函数。 */
+function startSessionPolling() {
+  const timer = setInterval(() => { sessionPollTick() }, SESSION_POLL_MS)
+  sessionPollTick() // 立即跑第一轮（含首次 sync）
+  return () => clearInterval(timer)
 }
 
 // ---------- 工具 ----------
@@ -490,6 +631,8 @@ function createTray() {
     if (!VALID_SKINS.includes(name)) return
     currentSkin = name
     saveSkinToDisk()
+    stopPulse()
+    clearFlashTimer()
     trayImages = buildTrayImages()
     if (tray && !tray.isDestroyed()) {
       tray.setImage(askActive ? trayImages.askFaint : trayImages.base)
@@ -604,6 +747,8 @@ if (!gotLock) {
   app.whenReady().then(() => {
     createTray()
     createWindow()
+    // 轮询会话状态驱动托盘呼吸灯（服务不可达时自动静默，等 ready 后再恢复）
+    stopSessionPolling = startSessionPolling()
     app.on('activate', () => showWindow())
   })
   app.on('window-all-closed', () => { /* 保持托盘常驻，不退出 */ })

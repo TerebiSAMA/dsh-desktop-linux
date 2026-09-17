@@ -26,12 +26,17 @@ SKINS = {
     'white': {'bg': (245, 247, 250, 255), 'fg': (13, 17, 23, 255)},
 }
 STATES = ['base', 'done', 'ask', 'ask-faint', 'fail']
+# 状态条画在鲸鱼下方（底部）。base 也有常驻灰条（指示灯槽）；
+# 呼吸用 pulse1-3（绿条 alpha 递减）由 main.js 循环播放。
 STATE_BAR = {
-    'done': (46, 160, 67, 255),     # 绿
-    'ask': (227, 179, 21, 255),     # 黄（亮）
+    'base': (148, 156, 170, 90),   # 灰（常驻灯槽）
+    'done': (46, 160, 67, 255),    # 绿
+    'ask': (227, 179, 21, 255),    # 黄（亮）
     'ask-faint': (227, 179, 21, 110),  # 黄（淡）
-    'fail': (218, 54, 51, 255),     # 红
+    'fail': (218, 54, 51, 255),    # 红
 }
+# 呼吸帧：绿条 alpha 从 255 递减到 40，再回 255，共 4 档
+PULSE_ALPHAS = [255, 150, 70, 150]
 
 FONT_CANDIDATES = [
     '/usr/share/fonts/google-noto-sans-mono-cjk-vf-fonts/NotoSansMonoCJK-VF.ttc',
@@ -97,12 +102,19 @@ def make_icon(size: int, skin: str, state: str) -> Image.Image:
         ty = (size - th) // 2 - bbox[1] - max(1, size // 22)  # 视觉居中微调
         d.text((tx, ty), text, font=font, fill=pal['fg'])
 
-    # 状态条：顶部 1px（@2x 2px）横条，宽度收窄到 60% 居中
+    # 状态条：鲸鱼下方底部 1px（@2x 2px）横条，宽度收窄到 60% 居中。
+    # base 也有灰色灯槽；pulse1-3 是绿色呼吸帧（alpha 递减）。
+    bar_h = 1 if size <= 22 else 2
+    bar_w = int(size * 0.6)
+    x0 = (size - bar_w) // 2
+    y0 = size - 1 - bar_h  # 底部
     if state in STATE_BAR:
-        bar_h = 1 if size <= 22 else 2
-        bar_w = int(size * 0.6)
-        x0 = (size - bar_w) // 2
-        d.rectangle([(x0, 1), (x0 + bar_w, 1 + bar_h)], fill=STATE_BAR[state])
+        d.rectangle([(x0, y0), (x0 + bar_w, y0 + bar_h)], fill=STATE_BAR[state])
+    elif state.startswith('pulse'):
+        idx = int(state[5:]) - 1  # pulse1..pulse4
+        alpha = PULSE_ALPHAS[idx % len(PULSE_ALPHAS)]
+        color = STATE_BAR['done'][:3] + (alpha,)
+        d.rectangle([(x0, y0), (x0 + bar_w, y0 + bar_h)], fill=color)
 
     return img
 
@@ -112,8 +124,9 @@ def main() -> int:
     # 兼容旧命名：base 用 tray.png（无 skin 前缀），其他保持原文件名。
     # 这样默认（蓝皮肤）资源还在原路径上，main.js 不改也能跑。
     generated = 0
+    all_states = STATES + [f'pulse{i}' for i in range(1, len(PULSE_ALPHAS) + 1)]
     for skin in SKINS:
-        for state in STATES:
+        for state in all_states:
             for size in (22, 44):
                 img = make_icon(size, skin, state)
                 suffix = '' if size == 22 else '@2x'
