@@ -7,7 +7,7 @@
 
 设计：
   - 圆角矩形 22×22 占比 100%（@2x 是 44×44）
-  - 字体：Noto Sans Mono CJK，渲染字符 "D"
+  - 中央图案：DeepSeek 鲸鱼剪影（tools/favicon.svg 官方 logo，rsvg 渲染成 mask 后按皮肤前景色填充）
   - 状态条：顶部 1px（@2x 2px）的彩色横条
 """
 from __future__ import annotations
@@ -16,9 +16,10 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ASSETS = Path(__file__).resolve().parent.parent / 'assets'
+TOOLS = Path(__file__).resolve().parent
 
 # 皮肤配色：(bg, fg, name)
-# bg: 圆角矩形底色; fg: "D" 前景色; 状态条颜色硬编码（绿/黄/红）
+# bg: 圆角矩形底色; fg: 鲸鱼前景色; 状态条颜色硬编码（绿/黄/红）
 SKINS = {
     'blue': {'bg': (77, 107, 254, 255),  'fg': (255, 255, 255, 255)},
     'black': {'bg': (33, 38, 45, 255),    'fg': (240, 246, 252, 255)},
@@ -38,6 +39,9 @@ FONT_CANDIDATES = [
     '/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc',
 ]
 
+# 鲸鱼 mask 缓存：{size: Image}
+_WHALE_CACHE = {}
+
 
 def find_font(size: int) -> ImageFont.FreeTypeFont:
     for path in FONT_CANDIDATES:
@@ -49,6 +53,25 @@ def find_font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def whale_mask(size: int) -> Image.Image | None:
+    """从 assets/icon.png（DeepSeek 鲸鱼应用图标）提取形状，缩放到 size×size 的 alpha mask。"""
+    if size in _WHALE_CACHE:
+        return _WHALE_CACHE[size]
+    src = ASSETS / 'icon.png'
+    if not src.exists():
+        return None
+    try:
+        icon = Image.open(src).convert('RGBA')
+    except Exception:
+        return None
+    # 图标是 1024×1024；取 alpha 通道，放大 4 倍超采样缩到目标尺寸保持边缘平滑
+    alpha = icon.getchannel('A')
+    big = alpha.resize((size * 4, size * 4), Image.LANCZOS)
+    mask = big.resize((size, size), Image.LANCZOS)
+    _WHALE_CACHE[size] = mask
+    return mask
+
+
 def make_icon(size: int, skin: str, state: str) -> Image.Image:
     pal = SKINS[skin]
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
@@ -57,15 +80,22 @@ def make_icon(size: int, skin: str, state: str) -> Image.Image:
     r = max(2, size // 5)
     d.rounded_rectangle([(0, 0), (size - 1, size - 1)], radius=r, fill=pal['bg'])
 
-    # 中央字符 "D"
-    font_size = int(size * 0.62)
-    font = find_font(font_size)
-    text = 'D'
-    bbox = d.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    tx = (size - tw) // 2 - bbox[0]
-    ty = (size - th) // 2 - bbox[1] - max(1, size // 22)  # 视觉居中微调
-    d.text((tx, ty), text, font=font, fill=pal['fg'])
+    # 中央图案：DeepSeek 鲸鱼剪影（官方 favicon），无 rsvg 环境回退 "D"
+    mask = whale_mask(size)
+    if mask is not None:
+        solid = Image.new('RGBA', (size, size), pal['fg'])
+        overlay = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        overlay.paste(solid, (0, 0), mask)
+        img.alpha_composite(overlay)
+    else:
+        font_size = int(size * 0.62)
+        font = find_font(font_size)
+        text = 'D'
+        bbox = d.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        tx = (size - tw) // 2 - bbox[0]
+        ty = (size - th) // 2 - bbox[1] - max(1, size // 22)  # 视觉居中微调
+        d.text((tx, ty), text, font=font, fill=pal['fg'])
 
     # 状态条：顶部 1px（@2x 2px）横条，宽度收窄到 60% 居中
     if state in STATE_BAR:
