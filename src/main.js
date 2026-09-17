@@ -376,6 +376,12 @@ function waitForServiceReady() {
   setTimeout(tick, WAIT_INTERVAL_MS)
 }
 
+/** 服务正在启动 / 重启 / 安装中：页面加载失败不应切到错误页，
+ *  交给 waitForServiceReady 轮询恢复（避免重启瞬间误显示错误页）。 */
+function serviceBusy() {
+  return ['starting-systemd', 'starting-direct', 'checking-cli', 'installing', 'installing-priv', 'waiting', 'restarting'].includes(installState.phase)
+}
+
 function notify(title, body) {
   if (Notification.isSupported()) {
     new Notification({ title, body, icon: ICON_PATH }).show()
@@ -432,10 +438,12 @@ function createWindow() {
     if (url.startsWith('http')) shell.openExternal(url)
   })
 
-  // 加载失败（服务没起）→ 加载本地错误页，并保证错误页能拿到最新状态
+  // 加载失败（服务没起）→ 加载本地错误页；但服务正在启动/重启中时
+  // 不切错误页（交给 waitForServiceReady 轮询恢复，避免误显示）。
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
     if (code === -3) return // ERR_ABORTED 忽略
     if (!mainWindow) return
+    if (serviceBusy()) return
     if (installState.phase === 'idle') {
       // GUI URL 直接崩了（不是启动场景）。给错误页一个明确状态。
       setInstallState({
@@ -496,7 +504,8 @@ function createTray() {
       { label: '打开 DSH Desktop', click: showWindow },
       { label: '重启 Harness 服务', click: () => {
           notify('DSH Desktop', '正在重启 Harness 服务…')
-          installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
+          // 置为 restarting：did-fail-load 期间不会切错误页，交给轮询恢复。
+          installState = { phase: 'restarting', message: '正在重启服务…', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
           execFile('systemctl', ['--user', 'restart', SERVICE], () => {
             setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
             waitForServiceReady()
@@ -564,10 +573,18 @@ ipcMain.handle('dsh:open-external', (_e, url) => {
 })
 // 错误页订阅安装/启动阶段；state 是 main 当前快照
 ipcMain.handle('dsh:install-state', () => installState)
-// 错误页"重试"按钮：再走一次完整阶段机
+// 错误页"重试"按钮：先探测；服务其实已通就直接加载 GUI，
+// 否则走一遍完整阶段机（systemd → 直接启动 → 安装 → 提权）。
 ipcMain.handle('dsh:retry-start', () => {
   installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
-  startOrInstall()
+  probeOnce().then((ok) => {
+    if (ok) {
+      setInstallState({ phase: 'ready', message: '服务已就绪' })
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(GUI_URL)
+    } else {
+      startOrInstall()
+    }
+  })
   return true
 })
 // 任务状态信号：Web GUI 检测到完成/提问/失败时驱动托盘光条。
