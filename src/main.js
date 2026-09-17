@@ -21,8 +21,43 @@ const GUI_URL = process.env.DSH_DESKTOP_URL || 'http://127.0.0.1:3080'
 const SERVICE = process.env.DSH_DESKTOP_SERVICE || 'dsh-web'
 const AUTOSTART_DIR = join(os.homedir(), '.config', 'autostart')
 const AUTOSTART_FILE = join(AUTOSTART_DIR, 'dsh-desktop.desktop')
+const APP_CONFIG_DIR = join(os.homedir(), '.config', 'dsh-desktop')
+const APP_CONFIG_FILE = join(APP_CONFIG_DIR, 'config.json')
 const ICON_PATH = join(__dirname, '..', 'assets', 'icon.png')
 const TRAY_ICON_PATH = join(__dirname, '..', 'assets', 'tray.png')
+
+// 托盘皮肤：三套配色（蓝/黑/白），每套有独立的 base/done/ask/ask-faint/fail 帧。
+// 蓝色为默认（文件名不带前缀，向后兼容）；其他皮肤命名 tray-<skin>-<state>.png。
+// @2x 版本加 @2x 后缀。生成脚本见 tools/gen-tray-assets.py。
+const VALID_SKINS = ['blue', 'black', 'white']
+const DEFAULT_SKIN = 'blue'
+let currentSkin = DEFAULT_SKIN
+
+function loadSkinFromDisk() {
+  try {
+    const cfg = JSON.parse(readFileSync(APP_CONFIG_FILE, 'utf8'))
+    if (cfg && typeof cfg.skin === 'string' && VALID_SKINS.includes(cfg.skin)) {
+      currentSkin = cfg.skin
+    }
+  } catch (e) { /* 缺文件/格式错就用默认 */ }
+}
+
+function saveSkinToDisk() {
+  try {
+    mkdirSync(APP_CONFIG_DIR, { recursive: true })
+    writeFileSync(APP_CONFIG_FILE, JSON.stringify({ skin: currentSkin }, null, 2))
+  } catch (e) { /* 写失败不影响运行 */ }
+}
+
+/** 给定皮肤 + 状态 → 资源文件名。hiDpi=true 时返回 @2x 版本。
+ *  state 名是驼峰（askFaint），文件名要转成 kebab-case（ask-faint）才能对得上素材。 */
+function trayFrameName(skin, state, hiDpi) {
+  const fileState = state.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())
+  const suf = hiDpi ? '@2x' : ''
+  if (skin === 'blue' && state === 'base') return 'tray' + suf + '.png'
+  if (skin === 'blue') return 'tray-' + fileState + suf + '.png'
+  return 'tray-' + skin + '-' + fileState + suf + '.png'
+}
 
 // ---------- 浏览器会话认证 ----------
 // Web 服务每次启动会生成随机启动 token（http://127.0.0.1:3080/?token=…），
@@ -87,15 +122,6 @@ async function installBrowserAuth(ses) {
   } catch (e) { /* 保持可启动，认证失败时回落旧流程 */ }
 }
 
-// 托盘“信号光条”帧：Web GUI 通过 dsh:signal 驱动（完成=绿 / 提问=黄 / 失败=红）。
-const TRAY_FRAMES = {
-  base: 'tray.png',
-  done: 'tray-done.png',
-  ask: 'tray-ask.png',
-  askFaint: 'tray-ask-faint.png',
-  fail: 'tray-fail.png',
-}
-
 let mainWindow = null
 let tray = null
 let isQuitting = false
@@ -116,6 +142,18 @@ function loadTrayImage(name) {
     if (!img.isEmpty()) return img
   } catch (e) { /* fall through */ }
   return nativeImage.createFromPath(TRAY_ICON_PATH)
+}
+
+/** 构造当前皮肤的全套托盘帧缓存（state → nativeImage）。 */
+function buildTrayImages() {
+  const states = ['base', 'done', 'ask', 'askFaint', 'fail']
+  const out = {}
+  for (const s of states) {
+    // 主版本（@1x）：createFromPath 会按需自动选 @2x（macOS/某些 Linux 行为不一定；
+    // 这里稳妥点两份都加载，由 Electron 自身做最终挑选）
+    out[s] = loadTrayImage(trayFrameName(currentSkin, s, false))
+  }
+  return out
 }
 
 /** 闪烁结束后应停留的帧：提问常驻弱黄条，否则基础图标。 */
@@ -433,36 +471,63 @@ function createWindow() {
 
 // ---------- 托盘 ----------
 function createTray() {
-  // 预载全部光条帧（@2x 由 nativeImage 按 DPI 自动选择），坏帧回退基础图标。
-  trayImages = {
-    base: loadTrayImage(TRAY_FRAMES.base),
-    done: loadTrayImage(TRAY_FRAMES.done),
-    ask: loadTrayImage(TRAY_FRAMES.ask),
-    askFaint: loadTrayImage(TRAY_FRAMES.askFaint),
-    fail: loadTrayImage(TRAY_FRAMES.fail),
-  }
+  // 预载当前皮肤的全套光条帧。
+  trayImages = buildTrayImages()
   tray = new Tray(trayImages.base)
   tray.setToolTip('DSH Desktop — DeepSeek Harness')
-  const menu = Menu.buildFromTemplate([
-    { label: '打开 DSH Desktop', click: showWindow },
-    { label: '重启 Harness 服务', click: () => {
-        notify('DSH Desktop', '正在重启 Harness 服务…')
-        // 先重置状态，避免显示上次的成功/失败文案
-        installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
-        execFile('systemctl', ['--user', 'restart', SERVICE], () => {
-          setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
-          waitForServiceReady()
-          // 顺便刷新 cookie（服务重启通常不需要，但密钥若被外部重置就保险）
-          installBrowserAuth(mainWindow.webContents.session)
-        })
-      } },
-    { type: 'separator' },
-    { label: '开机自启', type: 'checkbox', checked: isAutostartEnabled(), click: (item) => setAutostart(item.checked) },
-    { type: 'separator' },
-    { label: '退出', click: () => { isQuitting = true; app.quit() } },
-  ])
-  tray.setContextMenu(menu)
+
+  // 切换皮肤：写盘 + 重载帧缓存 + 立刻刷新托盘图。
+  function switchSkin(name) {
+    if (name === currentSkin) return
+    if (!VALID_SKINS.includes(name)) return
+    currentSkin = name
+    saveSkinToDisk()
+    trayImages = buildTrayImages()
+    if (tray && !tray.isDestroyed()) {
+      tray.setImage(askActive ? trayImages.askFaint : trayImages.base)
+    }
+    rebuildTrayMenu() // 单选状态变化，重建菜单
+  }
+
+  // 菜单模板（皮肤子菜单用闭包，radio 用 type:'radio'）。
+  let menu = null
+  function buildMenuTemplate() {
+    return [
+      { label: '打开 DSH Desktop', click: showWindow },
+      { label: '重启 Harness 服务', click: () => {
+          notify('DSH Desktop', '正在重启 Harness 服务…')
+          installState = { phase: 'idle', message: '', attempts: 0, lastError: '', manualSteps: [], startedAt: 0 }
+          execFile('systemctl', ['--user', 'restart', SERVICE], () => {
+            setInstallState({ phase: 'waiting', message: '等待服务就绪…' })
+            waitForServiceReady()
+            installBrowserAuth(mainWindow && mainWindow.webContents.session)
+          })
+        } },
+      { type: 'separator' },
+      { label: '图标皮肤', submenu: VALID_SKINS.map((skin) => ({
+        label: skinLabel(skin),
+        type: 'radio',
+        checked: currentSkin === skin,
+        click: () => switchSkin(skin),
+      })) },
+      { type: 'separator' },
+      { label: '开机自启', type: 'checkbox', checked: isAutostartEnabled(), click: (item) => setAutostart(item.checked) },
+      { type: 'separator' },
+      { label: '退出', click: () => { isQuitting = true; app.quit() } },
+    ]
+  }
+  function rebuildTrayMenu() {
+    if (!tray || tray.isDestroyed()) return
+    menu = Menu.buildFromTemplate(buildMenuTemplate())
+    tray.setContextMenu(menu)
+  }
+  rebuildTrayMenu()
   tray.on('click', showWindow)
+}
+
+/** 皮肤显示名（中英混排避免纯中文菜单的 IME 切换问题）。 */
+function skinLabel(skin) {
+  return ({ blue: '蓝色（默认）', black: '黑色', white: '白色' })[skin] || skin
 }
 
 // ---------- 开机自启 ----------
@@ -511,6 +576,9 @@ ipcMain.on('dsh:signal', (_e, kind) => {
 })
 
 // ---------- 生命周期 ----------
+// 启动前先读用户配置（皮肤等），让 createTray() 直接用对的资源。
+loadSkinFromDisk()
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
