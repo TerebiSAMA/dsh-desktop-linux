@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=DSH Desktop
+GenericName=DeepSeek Harness Desktop
+Comment=DeepSeek Harness desktop client for Linux
+# Exec 由桌面端在运行时写入（用真实二进制路径），本文件只作模板示例。
+# 用户也可以直接把 .AppImage 的绝对路径写在这里。
+Exec=/usr/bin/true
+Icon=dsh-desktop-linux
+Terminal=false
+Categories=Development;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+X-KDE-autostart-phase=1
+StartupWMClass=DSH Desktop

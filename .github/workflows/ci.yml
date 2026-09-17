@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    name: Smoke build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint (syntax check)
+        run: node --check src/main.js && node --check src/preload.js
+
+      - name: Smoke build
+        run: npm run pack
+        env:
+          # electron-builder 在 CI 里需要这个变量来跳过 publish
+          CSC_IDENTITY_AUTO_DISCOVERY: false

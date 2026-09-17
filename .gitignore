@@ -1,0 +1,25 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# local build artefacts
+build/icon.png
+build/icon512.png
+build/icon.icns
+build/icon.ico
+build/installerIcon.*
+
+# secrets
+.env
+.env.*
+
+# electron-builder output
+release/
+
+# yarn / npm cache
+.yarn/
+.pnp.*

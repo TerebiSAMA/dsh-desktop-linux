@@ -1,0 +1,63 @@
+{
+  "name": "dsh-desktop-linux",
+  "version": "0.2.1-alpha.1",
+  "description": "DeepSeek Harness Linux 桌面端（独立窗口 + 托盘 + 开机自启 + 系统通知）",
+  "main": "src/main.js",
+  "license": "MIT",
+  "author": {
+    "name": "TerebiSAMA",
+    "email": "terebisama@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/TerebiSAMA/dsh-desktop-linux",
+  "bugs": {
+    "url": "https://github.com/TerebiSAMA/dsh-desktop-linux/issues"
+  },
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --linux --dir",
+    "dist": "electron-builder --linux --publish never",
+    "dist:publish": "electron-builder --linux --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.dsh.desktop",
+    "productName": "DSH Desktop",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "icon": "assets/icon512.png",
+      "category": "Development",
+      "synopsis": "DeepSeek Harness desktop client for Linux",
+      "description": "Independent window + system tray + autostart + system notifications for the DeepSeek Harness Web GUI"
+    },
+    "asar": true,
+    "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "owner": "TerebiSAMA",
+      "repo": "dsh-desktop-linux"
+    }
+  },
+  "allowScripts": {
+    "electron@44.3.0": true
+  }
+}

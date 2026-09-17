@@ -1,0 +1,18 @@
+[Unit]
+Description=DeepSeek Harness Web GUI
+Documentation=https://github.com/deepseek-ai/deepseek-harness
+After=network.target
+
+[Service]
+Type=simple
+# WorkingDirectory 会随用户展开（%h = 用户家目录）。这样同一份单元文件
+# 在不同 Linux 用户机器上都能直接 systemctl --user enable。
+WorkingDirectory=%h
+# --no-open：不要自动拉起默认浏览器。桌面端本身就是 UI，
+# 让它打开会打扰用户当前在用的窗口。
+ExecStart=%h/.local/bin/dsh web --no-open
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

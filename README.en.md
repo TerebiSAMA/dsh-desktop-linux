@@ -1,0 +1,140 @@
+# DSH Desktop (Linux)
+
+> Desktop shell for DeepSeek Harness on Linux — standalone window · tray · autostart · auto-update
+
+[中文文档](./README.md)
+
+## What is it
+
+`dsh-desktop-linux` is an Electron shell wrapping the
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+Web GUI (`http://127.0.0.1:3080`). It gives you:
+
+- 🪟 Standalone window + system tray
+- 🔔 Task-status signal → tray LED (done / ask / fail)
+- 🚀 Autostart on login (XDG autostart)
+- 🔐 Self-signed cookie auth — no token to copy
+- 🔄 Auto-update via GitHub Releases
+
+## Prerequisites
+
+The desktop client is **a shell only**. You need a running DSH backend:
+
+1. **Recommended**: install from npm and run `dsh web`
+   ```bash
+   npm install -g @deepseek-ai/dsh
+   dsh web
+   ```
+2. **Or**: run `dsh web` from a source-tree build (see upstream `deepseek-ai/deepseek-harness`)
+3. **Or**: keep it running under a systemd user service (template in `extra/systemd/dsh-web.service`)
+
+**Before first launch** make sure `dsh web` has been started at least once — it writes the
+browser-session secret to `~/.dsh/.credentials.yaml`, which the desktop app needs for
+self-signed cookie auth.
+
+## Install
+
+Grab the latest release from
+[Releases](https://github.com/TerebiSAMA/dsh-desktop-linux/releases)
+(`DSH-Desktop-*.AppImage` / `.deb` / `.rpm`).
+
+### AppImage (most portable)
+
+```bash
+chmod +x DSH-Desktop-*.AppImage
+./DSH-Desktop-*.AppImage
+```
+
+To register as a desktop icon, move the AppImage to `~/Applications/` and run
+`appimaged` once.
+
+### Debian / Ubuntu
+
+```bash
+sudo dpkg -i dsh-desktop-linux_*.deb
+sudo apt -f install   # pull missing deps, if any
+```
+
+### Fedora / RHEL
+
+```bash
+sudo dnf install ./dsh-desktop-linux-*.rpm
+```
+
+## Auto-update
+
+The desktop checks GitHub Releases periodically and shows a tray notification when
+a new version is available; the upgrade is applied on the next launch
+(`electron-updater`).
+
+To disable auto-update there is no UI switch in this version — disconnect from the
+network before quitting if you want to keep the current build. A UI toggle is
+planned.
+
+## Development
+
+```bash
+git clone https://github.com/TerebiSAMA/dsh-desktop-linux.git
+cd dsh-desktop-linux
+npm install
+npm start
+```
+
+Build local artefacts:
+
+```bash
+npm run pack        # unpacked dev build
+npm run dist        # AppImage + deb + rpm into dist/
+```
+
+## Project layout
+
+```
+src/
+  main.js          # main process: window, tray, autostart, self-signed cookie
+  preload.js       # context-isolated IPC bridge
+  error.html       # fallback when the Web service is unreachable
+assets/
+  *.png           # app icon + tray state frames
+.github/workflows/
+  release.yml     # build AppImage / deb / rpm
+extra/
+  systemd/        # systemd user unit template (optional)
+  autostart/      # XDG autostart template (optional)
+```
+
+## FAQ
+
+### Double-click shows "systemctl --user status dsh-web"
+
+Means the DSH Web service is not running. Check:
+
+```bash
+systemctl --user status dsh-web   # if you set up the unit
+curl http://127.0.0.1:3080/        # direct probe
+```
+
+If the service isn't running but you installed `@deepseek-ai/dsh` via npm,
+just run `dsh web` directly. The desktop app will also try to bring it up
+automatically (systemd unit first, then `dsh web` via PATH as a fallback).
+
+### Self-signed cookie doesn't work
+
+Run `dsh web` at least once manually before opening the desktop, so the
+browser-session secret lands in `~/.dsh/.credentials.yaml`. If the secret is
+lost, delete the file and restart `dsh web`.
+
+### Service start steals focus from my minimized browser
+
+If you start the service directly with `dsh web`, it auto-opens the default
+browser. Pass `--no-open` (or use the unit template under `extra/systemd/`)
+to keep the desktop app as the only UI.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
+## Links
+
+- Upstream DSH: <https://github.com/deepseek-ai/deepseek-harness>
+- This repo: <https://github.com/TerebiSAMA/dsh-desktop-linux>
