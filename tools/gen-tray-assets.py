@@ -6,9 +6,11 @@
 皮肤切换由 main.js 通过命名约定 (tray-<skin>-<state>.png) 实现。
 
 设计：
-  - 圆角矩形 22×22 占比 100%（@2x 是 44×44）
-  - 中央图案：DeepSeek 鲸鱼剪影（tools/favicon.svg 官方 logo，rsvg 渲染成 mask 后按皮肤前景色填充）
-  - 状态条：顶部 1px（@2x 2px）的彩色横条
+  - 纯鲸鱼剪影（无背景色块）：从 assets/icon.png（桌面图标，透明底黑鲸鱼）取形状，
+    按皮肤染成鲸鱼本体颜色（蓝/黑/白）。
+  - 灯条：鲸鱼下方底部加粗横条（22px 用 2px 高，@2x 4px，宽 70% 居中），
+    base 灰色常驻灯槽，done/ask/fail 绿/黄/红。
+  - 呼吸：pulse1..6 绿条 alpha 平滑渐变，main.js 以 150ms 间隔循环播放。
 """
 from __future__ import annotations
 import os, sys
@@ -16,27 +18,35 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ASSETS = Path(__file__).resolve().parent.parent / 'assets'
-TOOLS = Path(__file__).resolve().parent
 
-# 皮肤配色：(bg, fg, name)
-# bg: 圆角矩形底色; fg: 鲸鱼前景色; 状态条颜色硬编码（绿/黄/红）
+# 皮肤配色：鲸鱼本体的颜色（无背景）
+# blue = DSH 蓝、black = 深黑灰、white = 近白（浅色任务栏上选它）
 SKINS = {
-    'blue': {'bg': (77, 107, 254, 255),  'fg': (255, 255, 255, 255)},
-    'black': {'bg': (33, 38, 45, 255),    'fg': (240, 246, 252, 255)},
-    'white': {'bg': (245, 247, 250, 255), 'fg': (13, 17, 23, 255)},
+    'blue': (77, 107, 254),
+    'black': (33, 38, 45),
+    'white': (245, 247, 250),
 }
 STATES = ['base', 'done', 'ask', 'ask-faint', 'fail']
-# 状态条画在鲸鱼下方（底部）。base 也有常驻灰条（指示灯槽）；
-# 呼吸用 pulse1-3（绿条 alpha 递减）由 main.js 循环播放。
+# 灯条颜色：base 灰槽（常驻，略透明）、done 绿、ask 黄、ask-faint 淡黄、fail 红
 STATE_BAR = {
-    'base': (148, 156, 170, 90),   # 灰（常驻灯槽）
-    'done': (46, 160, 67, 255),    # 绿
-    'ask': (227, 179, 21, 255),    # 黄（亮）
-    'ask-faint': (227, 179, 21, 110),  # 黄（淡）
-    'fail': (218, 54, 51, 255),    # 红
+    'base': (148, 156, 170, 150),
+    'done': (46, 160, 67, 255),
+    'ask': (227, 179, 21, 255),
+    'ask-faint': (227, 179, 21, 110),
+    'fail': (218, 54, 51, 255),
 }
-# 呼吸帧：绿条 alpha 从 255 递减到 40，再回 255，共 4 档
-PULSE_ALPHAS = [255, 150, 70, 150]
+# 呼吸帧：60 帧 @ 1000ms 周期（60fps），绿条 alpha 按正弦平滑呼吸（暗→亮→暗）。
+# 比之前 6 帧更流畅；1000ms 周期比原先 900ms 慢约 10%。
+PULSE_COUNT = 60
+def pulse_alphas():
+    import math
+    n = PULSE_COUNT
+    out = []
+    for i in range(n):
+        v = 0.5 - 0.5 * math.cos(2 * math.pi * i / n)  # 0..1 正弦
+        out.append(round(60 + 195 * v))  # 60（暗）→ 255（亮）→ 60，首尾闭合
+    return out
+PULSE_ALPHAS = pulse_alphas()
 
 FONT_CANDIDATES = [
     '/usr/share/fonts/google-noto-sans-mono-cjk-vf-fonts/NotoSansMonoCJK-VF.ttc',
@@ -78,43 +88,41 @@ def whale_mask(size: int) -> Image.Image | None:
 
 
 def make_icon(size: int, skin: str, state: str) -> Image.Image:
-    pal = SKINS[skin]
+    color = SKINS[skin]
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    # 圆角矩形
-    r = max(2, size // 5)
-    d.rounded_rectangle([(0, 0), (size - 1, size - 1)], radius=r, fill=pal['bg'])
 
-    # 中央图案：DeepSeek 鲸鱼剪影（官方 favicon），无 rsvg 环境回退 "D"
+    # 纯鲸鱼剪影：无背景色块，直接按皮肤色填充鲸鱼形状
     mask = whale_mask(size)
     if mask is not None:
-        solid = Image.new('RGBA', (size, size), pal['fg'])
+        solid = Image.new('RGBA', (size, size), color)
         overlay = Image.new('RGBA', (size, size), (0, 0, 0, 0))
         overlay.paste(solid, (0, 0), mask)
         img.alpha_composite(overlay)
     else:
+        # 回退：无 icon.png 时画 "D"
         font_size = int(size * 0.62)
         font = find_font(font_size)
         text = 'D'
         bbox = d.textbbox((0, 0), text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         tx = (size - tw) // 2 - bbox[0]
-        ty = (size - th) // 2 - bbox[1] - max(1, size // 22)  # 视觉居中微调
-        d.text((tx, ty), text, font=font, fill=pal['fg'])
+        ty = (size - th) // 2 - bbox[1] - max(1, size // 22)
+        d.text((tx, ty), text, font=font, fill=color)
 
-    # 状态条：鲸鱼下方底部 1px（@2x 2px）横条，宽度收窄到 60% 居中。
-    # base 也有灰色灯槽；pulse1-3 是绿色呼吸帧（alpha 递减）。
-    bar_h = 1 if size <= 22 else 2
-    bar_w = int(size * 0.6)
+    # 灯条：鲸鱼下方底部，加粗（22px→2px，@2x→4px），宽 70% 居中。
+    # base 灰色常驻灯槽；pulse1..60 绿条 alpha 正弦渐变（60fps 呼吸）。
+    bar_h = 2 if size <= 22 else 4
+    bar_w = int(size * 0.7)
     x0 = (size - bar_w) // 2
     y0 = size - 1 - bar_h  # 底部
     if state in STATE_BAR:
         d.rectangle([(x0, y0), (x0 + bar_w, y0 + bar_h)], fill=STATE_BAR[state])
     elif state.startswith('pulse'):
-        idx = int(state[5:]) - 1  # pulse1..pulse4
+        idx = int(state[5:]) - 1  # pulse1..pulse60
         alpha = PULSE_ALPHAS[idx % len(PULSE_ALPHAS)]
-        color = STATE_BAR['done'][:3] + (alpha,)
-        d.rectangle([(x0, y0), (x0 + bar_w, y0 + bar_h)], fill=color)
+        color_bar = STATE_BAR['done'][:3] + (alpha,)
+        d.rectangle([(x0, y0), (x0 + bar_w, y0 + bar_h)], fill=color_bar)
 
     return img
 

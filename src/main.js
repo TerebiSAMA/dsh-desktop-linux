@@ -129,9 +129,9 @@ let isQuitting = false
 // 托盘光条状态：askActive 表示“正有会话在等待用户”；pulseTimer 是运行中
 // 的绿色呼吸动画（鲸鱼下方的绿条淡入淡出）。设计：常驻底部灯槽（base 灰条），
 // 运行中绿条呼吸，完成绿闪，提问黄条常驻，失败红闪。
-const TRAY_BLINK_MS = 320
+const TRAY_BLINK_MS = 350
 const TRAY_BLINK_STEPS = 5 // on off on off on
-const TRAY_PULSE_MS = 250 // 呼吸帧间隔（pulse1..4 循环 ≈ 1s 周期）
+const TRAY_PULSE_MS = 16 // 60fps：呼吸帧间隔（pulse1..60 循环 ≈ 1.0s 周期）
 let trayFlashTimer = null
 let trayPulseTimer = null
 let askActive = false
@@ -150,7 +150,7 @@ function loadTrayImage(name) {
 
 /** 构造当前皮肤的全套托盘帧缓存（state → nativeImage）。 */
 function buildTrayImages() {
-  const states = ['base', 'done', 'ask', 'askFaint', 'fail', 'pulse1', 'pulse2', 'pulse3', 'pulse4']
+  const states = ['base', 'done', 'ask', 'askFaint', 'fail', ].concat(Array.from({ length: 60 }, (_, i) => 'pulse' + (i + 1)))
   const out = {}
   for (const s of states) {
     // 主版本（@1x）：createFromPath 会按需自动选 @2x（macOS/某些 Linux 行为不一定；
@@ -196,7 +196,7 @@ function clearFlashTimer() {
 function startPulse() {
   if (trayPulseTimer !== null) return
   let i = 0
-  const frames = [trayImages.pulse1, trayImages.pulse2, trayImages.pulse3, trayImages.pulse4]
+  const frames = Array.from({ length: 60 }, (_, i) => trayImages['pulse' + (i + 1)])
   const step = () => {
     if (!tray || trayPulseTimer === null) return
     tray.setImage(frames[i % frames.length])
@@ -246,17 +246,19 @@ function traySignal(kind) {
 // 检测：是否有会话在运行（绿条呼吸）、是否在等用户（黄条）、运行→结束（绿闪）。
 const SESSION_POLL_MS = 2000
 
-/** 发起一个 gateway RPC 调用；服务不可达/无密钥返回 null。 */
-function rpcCall(method, args) {
+/** 发起一个 gateway RPC 调用；服务不可达/无密钥返回 null。
+ *  opts.skipRequest=true 时不注入通用 _request 参数（部分端点不接受）。 */
+function rpcCall(method, args, opts) {
   return new Promise((resolve) => {
     const secret = browserAuthSecret()
     if (secret === undefined || typeof load !== 'function') return resolve(null)
     const cookie = mintBrowserCookie(secret, new URL(GUI_URL).host)
+    const merged = (opts && opts.skipRequest) ? (args || {}) : Object.assign({ _request: {} }, args || {})
     const body = JSON.stringify({
       type: 'client-request',
       rpcId: randomUUID(),
       method,
-      payload: { args: Object.assign({ _request: {} }, args || {}) },
+      payload: { args: merged },
     })
     const req = http.request(new URL(GUI_URL + '/api/' + method), {
       method: 'POST',
@@ -278,19 +280,49 @@ function rpcCall(method, args) {
   })
 }
 
-/** 从会话列表提取驱动灯条的摘要：{running, ask}。失败返回 null。 */
+/** 从会话列表提取驱动灯条的摘要：{byId, runningIds, ask}。失败返回 null。 */
 async function fetchSessionState() {
   const resp = await rpcCall('session/list', {})
   if (resp === null || resp.result?.ok !== true) return null
   const items = resp.result.value?.items || []
+  const runningIds = new Set()
+  const byId = new Map()
+  for (const i of items) {
+    byId.set(i.sessionId, { asOfSeq: i.projections?.asOfSeq || 0 })
+    if (i.running === true) runningIds.add(i.sessionId)
+  }
   return {
-    running: items.filter((i) => i.running === true).length,
+    byId,
+    runningIds,
+    running: runningIds.size,
     ask: items.some((i) => i.pendingInteraction !== undefined),
   }
 }
 
+/** 查一个刚结束的会话：最后一个 turn 的结束原因（'error' | 'completed' | 'aborted' | 'unknown'）。 */
+async function fetchLastTurnReason(sessionId, asOfSeq) {
+  const resp = await rpcCall('session/page', {
+    request: {
+      address: { kind: 'session', sessionId },
+      throughSeq: asOfSeq || 0,
+      maxMessages: 120,
+    },
+  }, { skipRequest: true })
+  if (resp === null || resp.result?.ok !== true) return 'unknown'
+  const records = resp.result.value?.records || []
+  // 从新到旧找最后一个 turn/end，取结束原因
+  for (let i = records.length - 1; i >= 0; i--) {
+    const ev = records[i]?.event
+    if (ev?.type !== 'turn/end') continue
+    const reason = ev.data?.reason
+    if (reason && typeof reason.kind === 'string') return reason.kind
+    return 'unknown'
+  }
+  return 'unknown'
+}
+
 // 轮询状态机的历史值
-const sessionPoll = { init: false, running: 0, ask: false }
+const sessionPoll = { init: false, runningIds: new Set(), asOfSeqOf: new Map(), ask: false }
 
 /**
  * 每轮轮询根据边沿驱动托盘：
@@ -309,7 +341,7 @@ async function sessionPollTick() {
 
   if (!sessionPoll.init) {
     sessionPoll.init = true
-    sessionPoll.running = nowRunning
+    sessionPoll.runningIds = new Set(st.runningIds)
     sessionPoll.ask = nowAsk
     if (nowAsk) { askActive = true; tray.setImage(trayImages.askFaint) }
     else if (nowRunning) startPulse()
@@ -318,7 +350,7 @@ async function sessionPollTick() {
   }
 
   const wasAsk = sessionPoll.ask
-  const wasRunning = sessionPoll.running
+  const wasRunning = sessionPoll.runningIds.size > 0
 
   // 提问边沿
   if (nowAsk && !wasAsk) {
@@ -339,13 +371,25 @@ async function sessionPollTick() {
       startPulse()
     } else if (!nowRunning && wasRunning) {
       stopPulse()
-      blinkTray(trayImages.done) // 完成：绿闪 → 灰条
+      // 有会话刚结束：查最后一个 turn 是否失败 → 红闪，否则绿闪
+      let reason = 'completed'
+      for (const id of sessionPoll.runningIds) {
+        if (!st.runningIds.has(id)) {
+          const seq = st.byId.get(id)?.asOfSeq ?? sessionPoll.asOfSeqOf.get(id) ?? 0
+          const r = await fetchLastTurnReason(id, seq)
+          if (r === 'error') reason = 'error'
+          break // 只需判一个刚结束的会话
+        }
+      }
+      if (reason === 'error') blinkTray(trayImages.fail)
+      else blinkTray(trayImages.done)
     } else if (!nowRunning && !wasRunning) {
       tray.setImage(trayImages.base)
     }
   }
 
-  sessionPoll.running = nowRunning
+  sessionPoll.runningIds = new Set(st.runningIds)
+  sessionPoll.asOfSeqOf = new Map(st.byId)
   sessionPoll.ask = nowAsk
 }
 
