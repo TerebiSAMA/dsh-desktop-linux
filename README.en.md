@@ -72,32 +72,34 @@ self-signed cookie auth.
 
 ## Install
 
-Grab the latest release from
-[Releases](https://github.com/TerebiSAMA/dsh-desktop-linux/releases)
-(`DSH-Desktop-*.AppImage` / `.deb` / `.rpm`).
+> **No prebuilt packages are published from this repo yet** — run from source.
+> The CI workflow (`.github/workflows/release.yml`) is in place and will publish
+> AppImage / deb / rpm to the Releases page automatically once a release tag is
+> pushed.
 
-### AppImage (most portable)
-
-```bash
-chmod +x DSH-Desktop-*.AppImage
-./DSH-Desktop-*.AppImage
-```
-
-To register as a desktop icon, move the AppImage to `~/Applications/` and run
-`appimaged` once.
-
-### Debian / Ubuntu
+### Run from source (recommended)
 
 ```bash
-sudo dpkg -i dsh-desktop-linux_*.deb
-sudo apt -f install   # pull missing deps, if any
+git clone https://github.com/TerebiSAMA/dsh-desktop-linux.git
+cd dsh-desktop-linux
+npm install
+npm start
 ```
 
-### Fedora / RHEL
+`npm start` boots Electron in dev mode — renderer changes hot-reload, but
+main-process edits require a manual restart.
+
+### Build packages locally (optional)
 
 ```bash
-sudo dnf install ./dsh-desktop-linux-*.rpm
+npm run pack        # unpacked runnable build (no installer)
+npm run dist        # AppImage / deb / rpm under dist/
 ```
+
+`npm run dist` needs `electron-builder`'s local toolchain (`rpm-build`,
+`fakeroot`, etc.). To get prebuilt packages without setting that up locally,
+trigger the `.github/workflows/release.yml` workflow in your fork — it drops
+artifacts on the Releases page.
 
 ## Auto-update
 

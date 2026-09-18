@@ -69,30 +69,31 @@ curl -fsSL https://raw.githubusercontent.com/TerebiSAMA/dsh-desktop-linux/main/i
 
 ## 安装
 
-前往 [Releases](https://github.com/TerebiSAMA/dsh-desktop-linux/releases) 下载
-最新版（`DSH-Desktop-*.AppImage` / `.deb` / `.rpm`）。
+> **当前仓库未发布预编译包**，请从源码运行（CI 已就绪，会在未来出
+> AppImage / deb / rpm 时自动发到 Releases 页面）。
 
-### AppImage（最便携）
-
-```bash
-chmod +x DSH-Desktop-*.AppImage
-./DSH-Desktop-*.AppImage
-```
-
-如果想注册成桌面图标：把 AppImage 移到 `~/Applications/`，再 `appimaged` 守护一次。
-
-### Debian / Ubuntu
+### 从源码运行（推荐）
 
 ```bash
-sudo dpkg -i dsh-desktop-linux_*.deb
-sudo apt -f install   # 补依赖（如果有）
+git clone https://github.com/TerebiSAMA/dsh-desktop-linux.git
+cd dsh-desktop-linux
+npm install
+npm start
 ```
 
-### Fedora / RHEL
+`npm start` 会启动 Electron 开发者模式；GUI 修改会热重载，但主进程
+改动需手动重启。
+
+### 自己打包（可选）
 
 ```bash
-sudo dnf install ./dsh-desktop-linux-*.rpm
+npm run pack        # 只解包运行，不出安装包
+npm run dist        # 出 AppImage / deb / rpm 到 dist/
 ```
+
+`npm run dist` 依赖 `electron-builder` 在本机工具链（rpm-build / fakeroot 等）。
+想体验预编译包可以在自己的 fork 里跑 Actions 工作流 `.github/workflows/release.yml`，
+产物会出现在 Release 页面。
 
 ## 自动更新
 
