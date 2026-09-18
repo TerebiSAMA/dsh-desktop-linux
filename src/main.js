@@ -320,12 +320,20 @@ async function fetchSessionState() {
   }
 }
 
+/** 友好 token 单位：326335 → "326K"，1200000 → "1.2M"。 */
+function fmtTokens(n) {
+  if (!n) return '0'
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M'
+  if (n >= 1000) return Math.round(n / 1000) + 'K'
+  return String(n)
+}
+
 /** 更新托盘悬停提示：当前会话名 + 状态/进度。 */
 function updateTrayTooltip(st, mode) {
   if (!tray) return
   const c = st.current
   let line2
-  if (mode === 'running') line2 = `▶ 运行中 · 回合 ${c.turns} · 步骤 ${c.steps} · 上下文 ${c.contextPct}%`
+  if (mode === 'running') line2 = `▶ 运行中 · 回合 ${c.turns} · 步骤 ${c.steps} · 上下文 ${c.contextPct}% · 输出 ${fmtTokens(c.outputTokens)}`
   else if (mode === 'ask') line2 = '⏸ 等待你的输入'
   else if (mode === 'fail') line2 = '✕ 最近一次任务失败'
   else line2 = '○ 空闲'
@@ -765,7 +773,22 @@ function createTray() {
     tray.setContextMenu(menu)
   }
   rebuildTrayMenu()
-  tray.on('click', showWindow)
+  // 单击托盘：显示窗口并切到运行中的会话（GUI 用内存路由，无法用 URL 跳转，
+  // 只能通过 DOM 点击会话行——运行中会话行带 [data-state="ongoing"] 标记）
+  tray.on('click', () => {
+    showWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.executeJavaScript(`
+        (() => {
+          const rows = Array.from(document.querySelectorAll('[class*="sessionRow"]'));
+          const running = rows.find(r => r.querySelector('[data-state="ongoing"]'));
+          const target = running || rows[0];
+          if (target) target.click();
+          return !!target;
+        })()
+      `).catch(() => {})
+    }
+  })
 }
 
 /** 皮肤显示名（中英混排避免纯中文菜单的 IME 切换问题）。 */
