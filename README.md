@@ -38,6 +38,10 @@ curl -fsSL https://raw.githubusercontent.com/TerebiSAMA/dsh-desktop-linux/main/i
 / `sudo dnf install ./...rpm` —— 见下文"安装"章节）。脚本可以重复跑，
 每一步都做幂等检查，不会重复覆盖。
 
+安装成功后**桌面会自动生成一个图标**（`~/Desktop/dsh-desktop-linux.desktop`，
+Exec 字段会自动检测 `/opt/...`、`/usr/bin/...`、AppImage 等常见安装路径）——
+headless 服务器（没有 `~/Desktop`）会跳过这步，其他平台图标都可正常启动。
+
 ## 启动流程（傻瓜式）
 
 双击图标后，桌面端会按下面顺序自动把一切准备好：

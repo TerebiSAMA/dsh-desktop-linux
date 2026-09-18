@@ -179,6 +179,112 @@ else
   fi
 fi
 
+# ---------- 7. 桌面图标（~/Desktop/dsh-desktop-linux.desktop） ----------
+# 期望在没有 X server 的服务器上也能跑，所以只在桌面目录真的存在时才生成。
+# 桌面目录遵循 XDG 标准，且不同语言 locale 下名字不同（~/Desktop / ~/桌面 /
+# ~/Bureau / ...），用 xdg-user-dir 找最稳。
+say "在桌面生成 DSH Desktop 图标"
+DESKTOP_DIR="$HOME/Desktop"
+if command -v xdg-user-dir >/dev/null 2>&1; then
+  XDG_DESKTOP="$(xdg-user-dir DESKTOP 2>/dev/null)"
+  if [ -n "$XDG_DESKTOP" ] && [ "$XDG_DESKTOP" != "$HOME" ] && [ -d "$XDG_DESKTOP" ]; then
+    DESKTOP_DIR="$XDG_DESKTOP"
+  fi
+fi
+# fallback：常见 locale 名字
+if [ ! -d "$DESKTOP_DIR" ]; then
+  for candidate in "$HOME/Desktop" "$HOME/桌面" "$HOME/Bureau" "$HOME/Schreibtisch"; do
+    if [ -d "$candidate" ]; then DESKTOP_DIR="$candidate"; break; fi
+  done
+fi
+if [ ! -d "$DESKTOP_DIR" ]; then
+  warn "找不到桌面目录（headless 环境？），跳过桌面图标"
+else
+  # 检测可执行文件（按优先级）
+  DETECTED_EXEC=""
+  for c in "/opt/DSH Desktop/dsh-desktop-linux" \
+           "/usr/bin/dsh-desktop-linux" \
+           "/usr/local/bin/dsh-desktop-linux" \
+           "$HOME/.local/bin/dsh-desktop-linux"; do
+    if [ -x "$c" ]; then DETECTED_EXEC="$c"; break; fi
+  done
+  if [ -z "$DETECTED_EXEC" ]; then
+    for a in "$HOME"/Applications/DSH-Desktop-*.AppImage \
+             "$HOME"/Apps/DSH-Desktop-*.AppImage \
+             "$HOME"/.local/bin/DSH-Desktop-*.Appimage; do
+      if [ -x "$a" ]; then DETECTED_EXEC="$a"; break; fi
+    done
+  fi
+
+  # 准备图标（拷到 ~/.local/share/icons 供桌面环境读取）
+  ICON_DIR="$HOME/.local/share/icons"
+  ICON_FILE="$ICON_DIR/dsh-desktop-linux.png"
+  if [ -f "$REPO_ROOT/assets/icon512.png" ]; then
+    mkdir -p "$ICON_DIR"
+    cp "$REPO_ROOT/assets/icon512.png" "$ICON_FILE"
+  elif command -v curl >/dev/null 2>&1; then
+    mkdir -p "$ICON_DIR"
+    if ! curl -fsSL -o "$ICON_FILE" \
+        "https://raw.githubusercontent.com/TerebiSAMA/dsh-desktop-linux/main/assets/icon512.png" 2>/dev/null; then
+      ICON_FILE=""
+    fi
+  else
+    ICON_FILE=""
+  fi
+
+  # 写 .desktop 文件
+  DESKTOP_FILE="$DESKTOP_DIR/dsh-desktop-linux.desktop"
+  if [ -n "$DETECTED_EXEC" ]; then
+    cat > "$DESKTOP_FILE" <<EOF2
+[Desktop Entry]
+Type=Application
+Name=DSH Desktop
+GenericName=DeepSeek Harness Desktop
+Comment=DeepSeek Harness desktop client for Linux
+Exec=$DETECTED_EXEC
+Icon=${ICON_FILE:-dsh-desktop-linux}
+Terminal=false
+Categories=Development;
+StartupWMClass=DSH Desktop
+EOF2
+    chmod +x "$DESKTOP_FILE"
+    ok "桌面图标: $DESKTOP_FILE"
+    ok "  Exec = $DETECTED_EXEC"
+    ok "  Icon = ${ICON_FILE:-dsh-desktop-linux}"
+  elif [ -f "$REPO_ROOT/package.json" ] && grep -q '"name": "dsh-desktop-linux"' "$REPO_ROOT/package.json" 2>/dev/null; then
+    # 源码运行场景：写一个 wrapper 脚本再指向它
+    WRAPPER="$HOME/.local/bin/dsh-desktop-linux-launch.sh"
+    mkdir -p "$(dirname "$WRAPPER")"
+    cat > "$WRAPPER" <<EOF2
+#!/usr/bin/env bash
+# 由 dsh-desktop-linux/install.sh 生成的启动器
+cd "$REPO_ROOT" || exit 1
+exec npm start
+EOF2
+    chmod +x "$WRAPPER"
+    cat > "$DESKTOP_FILE" <<EOF2
+[Desktop Entry]
+Type=Application
+Name=DSH Desktop
+GenericName=DeepSeek Harness Desktop
+Comment=DeepSeek Harness desktop client for Linux
+Exec=$WRAPPER
+Icon=${ICON_FILE:-dsh-desktop-linux}
+Terminal=false
+Categories=Development;
+StartupWMClass=DSH Desktop
+EOF2
+    chmod +x "$DESKTOP_FILE"
+    ok "桌面图标: $DESKTOP_FILE"
+    ok "  Exec = $WRAPPER  (wrapper → cd $REPO_ROOT && npm start)"
+    ok "  Icon = ${ICON_FILE:-dsh-desktop-linux}"
+  else
+    warn "找不到桌面端可执行文件 / 也不是从源码克隆运行，未生成桌面图标"
+    warn "  请先装桌面端（下载 AppImage / deb / rpm 或 git clone 仓库），"
+    warn "  然后再跑一次 install.sh"
+  fi
+fi
+
 cat <<'EOF'
 
 ✓ 准备完成。

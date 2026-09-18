@@ -38,6 +38,11 @@ After it finishes, launch the desktop client via whichever package you grabbed
 — see the **Install** section below). The script is idempotent — re-running it
 won't clobber existing config.
 
+On success the script also drops a `dsh-desktop-linux.desktop` launcher into
+`~/Desktop/` (Exec field is auto-detected: `/opt/...`, `/usr/bin/...`,
+AppImage, or a wrapper that does `cd <repo> && npm start`). Headless hosts
+without `~/Desktop` are skipped without error.
+
 ## Startup flow (zero-config)
 
 After a double-click, the desktop client walks through this state machine automatically:
