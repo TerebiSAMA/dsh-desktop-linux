@@ -128,13 +128,14 @@ let isQuitting = false
 
 // 托盘光条状态：askActive 表示“正有会话在等待用户”；pulseTimer 是运行中
 // 的绿色呼吸动画（鲸鱼下方的绿条淡入淡出）。设计：常驻底部灯槽（base 灰条），
-// 运行中绿条呼吸，完成绿闪，提问黄条常驻，失败红闪。
+// 运行中绿条呼吸，完成绿闪，提问黄条常驻，失败红条常驻（failHeld）。
 const TRAY_BLINK_MS = 350
 const TRAY_BLINK_STEPS = 5 // on off on off on
 const TRAY_PULSE_MS = 16 // 60fps：呼吸帧间隔（pulse1..60 循环 ≈ 1.0s 周期）
 let trayFlashTimer = null
 let trayPulseTimer = null
 let askActive = false
+let failHeld = false
 let trayImages = null
 let stopSessionPolling = null
 
@@ -222,18 +223,23 @@ function traySignal(kind) {
   switch (kind) {
     case 'ask':
       askActive = true
+      failHeld = false
       blinkTray(trayImages.ask)
       break
     case 'clear':
       askActive = false
+      failHeld = false
       clearFlashTimer()
       tray.setImage(trayImages.base)
       break
     case 'done':
+      failHeld = false
       blinkTray(trayImages.done)
       break
     case 'fail':
-      blinkTray(trayImages.fail)
+      failHeld = true
+      clearFlashTimer()
+      tray.setImage(trayImages.fail) // 红条常驻
       break
     default:
       break
@@ -328,7 +334,7 @@ const sessionPoll = { init: false, runningIds: new Set(), asOfSeqOf: new Map(), 
  * 每轮轮询根据边沿驱动托盘：
  *  - 新出现等待用户的会话 → 黄条闪烁后常驻弱黄
  *  - 从无运行到有运行 → 绿条呼吸
- *  - 从运行到结束 → 绿闪后回落（若仍在等用户则黄条）
+ *  - 从运行到结束 → 失败：红条常驻（直到下次任务/输入）；否则绿闪后回落
  *  - 空闲 → 灰条常驻
  */
 async function sessionPollTick() {
@@ -343,8 +349,8 @@ async function sessionPollTick() {
     sessionPoll.init = true
     sessionPoll.runningIds = new Set(st.runningIds)
     sessionPoll.ask = nowAsk
-    if (nowAsk) { askActive = true; tray.setImage(trayImages.askFaint) }
-    else if (nowRunning) startPulse()
+    if (nowAsk) { askActive = true; failHeld = false; tray.setImage(trayImages.askFaint) }
+    else if (nowRunning) { failHeld = false; startPulse() }
     else tray.setImage(trayImages.base)
     return
   }
@@ -352,9 +358,10 @@ async function sessionPollTick() {
   const wasAsk = sessionPoll.ask
   const wasRunning = sessionPoll.runningIds.size > 0
 
-  // 提问边沿
+  // 提问边沿（黄条优先：任何活动都会清除失败常驻）
   if (nowAsk && !wasAsk) {
     askActive = true
+    failHeld = false
     stopPulse()
     blinkTray(trayImages.ask)
   } else if (!nowAsk && wasAsk) {
@@ -362,16 +369,18 @@ async function sessionPollTick() {
     clearFlashTimer()
     stopPulse()
     if (nowRunning) startPulse()
+    else if (failHeld) tray.setImage(trayImages.fail)
     else tray.setImage(trayImages.base)
   }
 
-  // 运行边沿（提问优先：等待用户时呼吸暂停，保持黄条）
+  // 运行边沿
   if (!nowAsk) {
     if (nowRunning && !wasRunning) {
+      failHeld = false
       startPulse()
     } else if (!nowRunning && wasRunning) {
       stopPulse()
-      // 有会话刚结束：查最后一个 turn 是否失败 → 红闪，否则绿闪
+      // 有会话刚结束：查最后一个 turn 是否失败 → 红条常驻，否则绿闪
       let reason = 'completed'
       for (const id of sessionPoll.runningIds) {
         if (!st.runningIds.has(id)) {
@@ -381,10 +390,15 @@ async function sessionPollTick() {
           break // 只需判一个刚结束的会话
         }
       }
-      if (reason === 'error') blinkTray(trayImages.fail)
-      else blinkTray(trayImages.done)
+      if (reason === 'error') {
+        failHeld = true
+        tray.setImage(trayImages.fail) // 红条常驻，直到下次活动
+      } else {
+        blinkTray(trayImages.done)
+      }
     } else if (!nowRunning && !wasRunning) {
-      tray.setImage(trayImages.base)
+      // 空闲：保持失败红条，否则灰条
+      if (!failHeld) tray.setImage(trayImages.base)
     }
   }
 
@@ -679,7 +693,7 @@ function createTray() {
     clearFlashTimer()
     trayImages = buildTrayImages()
     if (tray && !tray.isDestroyed()) {
-      tray.setImage(askActive ? trayImages.askFaint : trayImages.base)
+      tray.setImage(askActive ? trayImages.askFaint : failHeld ? trayImages.fail : trayImages.base)
     }
     rebuildTrayMenu() // 单选状态变化，重建菜单
   }
