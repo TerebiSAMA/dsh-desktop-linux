@@ -286,7 +286,7 @@ function rpcCall(method, args, opts) {
   })
 }
 
-/** 从会话列表提取驱动灯条的摘要：{byId, runningIds, ask}。失败返回 null。 */
+/** 从会话列表提取驱动灯条的摘要：{byId, runningIds, ask, current}。失败返回 null。 */
 async function fetchSessionState() {
   const resp = await rpcCall('session/list', {})
   if (resp === null || resp.result?.ok !== true) return null
@@ -297,12 +297,39 @@ async function fetchSessionState() {
     byId.set(i.sessionId, { asOfSeq: i.projections?.asOfSeq || 0 })
     if (i.running === true) runningIds.add(i.sessionId)
   }
+  // 当前会话：运行中的优先，否则最近更新的那个
+  let current = null
+  for (const i of items) if (i.running === true) { current = i; break }
+  if (current === null) {
+    for (const i of items) if (current === null || i.updatedAt > current.updatedAt) current = i
+  }
+  const vals = current?.projections?.values || {}
+  const cp = vals.contextPressure
   return {
     byId,
     runningIds,
     running: runningIds.size,
     ask: items.some((i) => i.pendingInteraction !== undefined),
+    current: {
+      title: vals.title || '未命名会话',
+      turns: vals.sessionStats?.turns || 0,
+      steps: vals.sessionStats?.steps || 0,
+      contextPct: cp && cp.contextWindow ? Math.round(((cp.projectedTokens || 0) * 100) / cp.contextWindow) : 0,
+      outputTokens: vals.tokenUsage?.outputTokens || 0,
+    },
   }
+}
+
+/** 更新托盘悬停提示：当前会话名 + 状态/进度。 */
+function updateTrayTooltip(st, mode) {
+  if (!tray) return
+  const c = st.current
+  let line2
+  if (mode === 'running') line2 = `▶ 运行中 · 回合 ${c.turns} · 步骤 ${c.steps} · 上下文 ${c.contextPct}%`
+  else if (mode === 'ask') line2 = '⏸ 等待你的输入'
+  else if (mode === 'fail') line2 = '✕ 最近一次任务失败'
+  else line2 = '○ 空闲'
+  tray.setToolTip(`${c.title}\n${line2}`)
 }
 
 /** 查一个刚结束的会话：最后一个 turn 的结束原因（'error' | 'completed' | 'aborted' | 'unknown'）。 */
@@ -349,9 +376,9 @@ async function sessionPollTick() {
     sessionPoll.init = true
     sessionPoll.runningIds = new Set(st.runningIds)
     sessionPoll.ask = nowAsk
-    if (nowAsk) { askActive = true; failHeld = false; tray.setImage(trayImages.askFaint) }
-    else if (nowRunning) { failHeld = false; startPulse() }
-    else tray.setImage(trayImages.base)
+    if (nowAsk) { askActive = true; failHeld = false; tray.setImage(trayImages.askFaint); updateTrayTooltip(st, 'ask') }
+    else if (nowRunning) { failHeld = false; startPulse(); updateTrayTooltip(st, 'running') }
+    else { tray.setImage(trayImages.base); updateTrayTooltip(st, 'idle') }
     return
   }
 
@@ -405,6 +432,12 @@ async function sessionPollTick() {
   sessionPoll.runningIds = new Set(st.runningIds)
   sessionPoll.asOfSeqOf = new Map(st.byId)
   sessionPoll.ask = nowAsk
+
+  // 更新悬停提示（黄 > 红 > 绿呼吸 > 灰）
+  if (nowAsk) updateTrayTooltip(st, 'ask')
+  else if (failHeld) updateTrayTooltip(st, 'fail')
+  else if (st.runningIds.size > 0) updateTrayTooltip(st, 'running')
+  else updateTrayTooltip(st, 'idle')
 }
 
 /** 启动轮询；返回停止函数。 */
