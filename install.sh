@@ -4,10 +4,12 @@
 # 默认只做"必需"的准备（DSH 后端 + GUI 客户端插件 + 首次起一次让
 # credentials 落地）。可选步骤通过 flag 启用：
 #
-#   --with-systemd   安装并启用 systemd 用户单元（DSH Web 后台守护，
-#                    失败自动重启。推荐用于长时间挂着的桌面环境）
-#   --with-autostart 安装 XDG autostart 桌面项（开机启动桌面端）
-#   --no-launch      不自动起 dsh web（自己控制时机）
+#   --with-systemd    安装并启用 systemd 用户单元（DSH Web 后台守护，
+#                     失败自动重启。推荐用于长时间挂着的桌面环境）
+#   --with-autostart  安装 XDG autostart 桌面项（开机启动桌面端）
+#   --with-lan-proxy  安装 LAN 反向代理（让 dsh 从局域网内可访问）
+#                     搭配 --lan-host=<本机 LAN IP> 和 --lan-client=<允许访问的 IP>
+#   --no-launch       不自动起 dsh web（自己控制时机）
 #
 # 一行安装：
 #   curl -fsSL https://raw.githubusercontent.com/TerebiSAMA/dsh-desktop-linux/main/install.sh | bash -s -- --with-systemd
@@ -26,11 +28,17 @@ AUTOSTART_DIR="$HOME/.config/autostart"
 
 WITH_SYSTEMD=0
 WITH_AUTOSTART=0
+WITH_LAN_PROXY=0
 NO_LAUNCH=0
+LAN_HOST=""
+LAN_CLIENT=""
 for arg in "$@"; do
   case "$arg" in
     --with-systemd)   WITH_SYSTEMD=1 ;;
     --with-autostart) WITH_AUTOSTART=1 ;;
+    --with-lan-proxy) WITH_LAN_PROXY=1 ;;
+    --lan-host=*)     LAN_HOST="${arg#--lan-host=}" ;;
+    --lan-client=*)   LAN_CLIENT="${arg#--lan-client=}" ;;
     --no-launch)      NO_LAUNCH=1 ;;
     -h|--help)
       sed -n '2,18p' "$0"; exit 0 ;;
@@ -179,7 +187,54 @@ else
   fi
 fi
 
-# ---------- 7. 桌面图标（~/Desktop/dsh-desktop-linux.desktop） ----------
+# ---------- 7. LAN 反向代理（--with-lan-proxy） ----------
+if [ "$WITH_LAN_PROXY" = 1 ]; then
+  say "安装 LAN 反向代理（dsh-lan-proxy）"
+  if [ -z "$LAN_HOST" ] || [ -z "$LAN_CLIENT" ]; then
+    warn "缺少 --lan-host=<本机LAN IP> 或 --lan-client=<允许访问的客户端 IP>"
+    warn "  示例: install.sh --with-lan-proxy --lan-host=<本机LAN IP> --lan-client=<允许访问的 IP>"
+    warn "  跳过 LAN 代理安装"
+  elif [ -d "$REPO_ROOT/tools" ] && [ -f "$REPO_ROOT/tools/dsh-lan-proxy.js" ]; then
+    # 装脚本
+    sudo install -m755 "$REPO_ROOT/tools/dsh-lan-proxy.js" /usr/local/lib/dsh-desktop-linux/dsh-lan-proxy.js
+    sudo install -m755 "$REPO_ROOT/tools/dsh-lan-proxy-env.sh" /usr/local/bin/dsh-lan-proxy-env
+    sudo mkdir -p /usr/local/lib/dsh-desktop-linux
+    # 装 systemd unit（替换占位符）
+    mkdir -p "$HOME/.config/systemd/user"
+    sed -e "s|<LAN_IP>|$LAN_HOST|g" "$REPO_ROOT/extra/systemd/dsh-lan-proxy.service" \
+      | sed -e "s|<CLIENT_IP>|$LAN_CLIENT|g" \
+      > "$HOME/.config/systemd/user/dsh-lan-proxy.service"
+    cp "$REPO_ROOT/extra/systemd/dsh-lan-proxy-env.service" "$HOME/.config/systemd/user/"
+    ok "systemd 单元已写好: ~/.config/systemd/user/dsh-lan-proxy.service"
+    ok "  DSH_LAN_HOST=$LAN_HOST  DSH_ALLOWED_REMOTE=$LAN_CLIENT"
+
+    # 让 dsh 信任 LAN 端（drop-in）
+    if [ -d "$HOME/.config/systemd/user/dsh-web.service.d" ] || mkdir -p "$HOME/.config/systemd/user/dsh-web.service.d"; then
+      sed -e "s|<LAN_IP>|$LAN_HOST|g" \
+        "$REPO_ROOT/extra/systemd/dsh-web.service.d/public-bind.conf.example" \
+        > "$HOME/.config/systemd/user/dsh-web.service.d/public-bind.conf"
+      ok "dsh-web drop-in: ~/.config/systemd/user/dsh-web.service.d/public-bind.conf"
+    fi
+
+    # 启用并启动
+    systemctl --user daemon-reload
+    systemctl --user enable --now dsh-lan-proxy-env.service 2>/dev/null && ok "dsh-lan-proxy-env.service 已启用"
+    systemctl --user enable --now dsh-lan-proxy.service 2>/dev/null && ok "dsh-lan-proxy.service 已启用"
+    systemctl --user restart dsh-web.service 2>/dev/null && ok "dsh-web.service 已重启（加载 --trusted-host）"
+
+    # firewalld 提示
+    if command -v firewall-cmd >/dev/null 2>&1; then
+      echo ""
+      echo "    firewalld: 如果还没给 5080 端口加白名单，建议执行："
+      echo "      sudo firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"$LAN_CLIENT\" port port=\"5080\" protocol=\"tcp\" accept'"
+      echo "      sudo firewall-cmd --reload"
+    fi
+  else
+    warn "找不到 tools/dsh-lan-proxy.js（仓库结构不对？），跳过"
+  fi
+fi
+
+# ---------- 8. 桌面图标（~/Desktop/dsh-desktop-linux.desktop） ----------
 # 期望在没有 X server 的服务器上也能跑，所以只在桌面目录真的存在时才生成。
 # 桌面目录遵循 XDG 标准，且不同语言 locale 下名字不同（~/Desktop / ~/桌面 /
 # ~/Bureau / ...），用 xdg-user-dir 找最稳。

@@ -1,0 +1,10 @@
+[Service]
+Environment=
+# Tell dsh that requests claiming this LAN authority come from a browser
+# session that has already been authenticated upstream by the LAN-facing
+# reverse proxy (dsh-lan-proxy).
+# FILL IN: replace <LAN_IP> with this host's LAN-visible IP (must match
+# DSH_LAN_HOST in dsh-lan-proxy.service). Add additional --trusted-host
+# flags if you want multiple LAN IPs to work.
+ExecStart=
+ExecStart=/home/<USERNAME>/.local/bin/dsh web --no-open --trusted-host <LAN_IP>:5080

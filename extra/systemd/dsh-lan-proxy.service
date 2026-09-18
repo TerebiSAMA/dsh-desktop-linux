@@ -1,0 +1,22 @@
+[Unit]
+Description=dsh LAN-facing reverse proxy (re-issues browser cookie for LAN authority)
+After=dsh-web.service
+BindsTo=dsh-web.service
+
+[Service]
+Type=simple
+# FILL IN: LAN-visible IP that other machines will use to reach this host.
+Environment=DSH_LAN_HOST=<LAN_IP>
+Environment=DSH_LAN_PORT=5080
+Environment=DSH_UPSTREAM=http://127.0.0.1:3080
+Environment=DSH_TOKEN_FILE=/run/user/%U/dsh-lan-proxy.env
+# Comma-separated whitelist of remote IPs allowed through. Loopback is
+# always allowed. Empty allows every remote address.
+# FILL IN: the IP(s) of machines that should reach the LAN endpoint.
+Environment=DSH_ALLOWED_REMOTE=<CLIENT_IP>
+ExecStart=/usr/bin/env node /usr/local/lib/dsh-desktop-linux/dsh-lan-proxy.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

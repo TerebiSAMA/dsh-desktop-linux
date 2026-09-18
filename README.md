@@ -99,6 +99,95 @@ npm run dist        # 出 AppImage / deb / rpm 到 dist/
 想体验预编译包可以在自己的 fork 里跑 Actions 工作流 `.github/workflows/release.yml`，
 产物会出现在 Release 页面。
 
+## 局域网访问（把 dsh 从局域网内暴露给其他机器）
+
+DSH 上游默认只绑 `127.0.0.1:3080`，且 npm 缓存版本硬编码拒绝绑定 `0.0.0.0`。
+本仓库提供了一个**零依赖 Node 反向代理**（`tools/dsh-lan-proxy.js`），
+监听 `0.0.0.0:<LAN_PORT>`（默认 `5080`），把请求转发到本机 `127.0.0.1:3080`，
+并自己**重新种 cookie**——因为 dsh 的浏览器 cookie 是按 `Host` 头签的，
+直接转发会被 `host fence` 挡掉。
+
+### 安装（systemd 用户单元）
+
+把代理脚本和 token watcher 装到系统：
+
+```bash
+# 把代理和 token watcher 放到标准位置
+sudo install -m755 tools/dsh-lan-proxy.js /usr/local/lib/dsh-desktop-linux/dsh-lan-proxy.js
+sudo install -m755 tools/dsh-lan-proxy-env.sh /usr/local/bin/dsh-lan-proxy-env
+sudo mkdir -p /usr/local/lib/dsh-desktop-linux
+
+# 把 systemd 单元装到用户目录
+mkdir -p ~/.config/systemd/user
+cp extra/systemd/dsh-lan-proxy.service ~/.config/systemd/user/
+cp extra/systemd/dsh-lan-proxy-env.service ~/.config/systemd/user/
+
+# 改两个占位符：DSH_LAN_HOST、DSH_ALLOWED_REMOTE
+$EDITOR ~/.config/systemd/user/dsh-lan-proxy.service
+#   Environment=DSH_LAN_HOST=192.168.x.y          ← 这台机器的 LAN IP
+#   Environment=DSH_ALLOWED_REMOTE=192.168.x.z     ← 允许访问的客户端 IP（逗号分隔）
+
+# 让 dsh 信任 LAN 端的来源（drop-in）
+mkdir -p ~/.config/systemd/user/dsh-web.service.d
+cp extra/systemd/dsh-web.service.d/public-bind.conf.example \
+   ~/.config/systemd/user/dsh-web.service.d/public-bind.conf
+$EDITOR ~/.config/systemd/user/dsh-web.service.d/public-bind.conf
+#   把 <LAN_IP> 替换成这台机器的 LAN IP（必须和 DSH_LAN_HOST 一致）
+
+systemctl --user daemon-reload
+systemctl --user enable --now dsh-lan-proxy-env.service
+systemctl --user enable --now dsh-lan-proxy.service
+systemctl --user enable --now dsh-web.service   # 已装过的就 restart
+```
+
+### firewalld 限制访问源 IP（强烈推荐）
+
+只允许上面 `DSH_ALLOWED_REMOTE` 里的客户端访问 5080：
+
+```bash
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.x.z" port port="5080" protocol="tcp" accept'
+sudo firewall-cmd --reload
+```
+
+不放心可以再加一条拒绝规则兜底（先接受后拒绝 → 默认拒绝）：
+
+```bash
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" port port="5080" protocol="tcp" reject'
+sudo firewall-cmd --reload
+```
+
+### 工作原理（一句话）
+
+代理监听 `0.0.0.0:5080` → 第一次接到请求时，代理内部用 `Host: <LAN_IP>:5080`
+头去 `127.0.0.1:3080/?token=<token>` 让 dsh 自己签一个 cookie → 缓存它，
+后续请求都注入这个 cookie 并把 `Host`/`Origin`/`Referer` 重写到 LAN authority
+→ dsh 看到的就像"同一台机器的同一浏览器会话"。`/api/remote.mux` 的 WebSocket
+升级 101 响应完整透传。`dsh-web` 重启换 token 时，`dsh-lan-proxy-env.service`
+从 systemd journal 抓新 token 写到 `/run/user/<uid>/dsh-lan-proxy.env`，
+代理下次请求会自动重新种 cookie，无需人工介入。
+
+### 配置参数
+
+代理通过环境变量配置（systemd 单元的 `Environment=` 行）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `DSH_LAN_HOST` | `127.0.0.1` | LAN 端看到的 IP（**必填**为你机器的 LAN IP） |
+| `DSH_LAN_PORT` | `5080` | LAN 端口 |
+| `DSH_UPSTREAM` | `http://127.0.0.1:3080` | dsh 上游 |
+| `DSH_TOKEN_FILE` | `/run/user/%U/dsh-lan-proxy.env` | token 文件（由 watcher 维护） |
+| `DSH_COOKIE_TTL_MS` | `600000` | cookie 复用窗口（10 分钟） |
+| `DSH_ALLOWED_REMOTE` | `""` | 逗号分隔允许的客户端 IP；空 = 全允许（**务必配置**） |
+
+### 安全提醒
+
+- 这个代理**不处理 HTTPS**——公网/不受信任的网段使用前请套一层 TLS 终结
+  （caddy / nginx / stunnel），否则 cookie 和会话内容明文传输。
+- `DSH_ALLOWED_REMOTE` **必须配置**——空字符串等于放行所有 IP。
+- firewalld 是第二道防线，**强烈推荐**配合 IP 白名单一起用。
+- 代理不会修改 dsh 数据，只是转发；如果局域网里有人滥用，删除其
+  `DSH_ALLOWED_REMOTE` 条目即可立即断供。
+
 ## 自动更新
 
 桌面端启动后会定期检查 GitHub Releases，发现新版本会在托盘弹通知，

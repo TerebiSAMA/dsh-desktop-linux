@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch dsh-web.service journal and export DSH_TOKEN to a file
+After=dsh-web.service
+BindsTo=dsh-web.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/dsh-lan-proxy-env
+Restart=always
+RestartSec=3
