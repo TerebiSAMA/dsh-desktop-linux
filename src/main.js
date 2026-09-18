@@ -305,6 +305,9 @@ async function fetchSessionState() {
   }
   const vals = current?.projections?.values || {}
   const cp = vals.contextPressure
+  const ss = vals.sessionStats || {}
+  const decodeMs = ss.decodeMs || 0
+  const decodeTokens = ss.decodeTokens || 0
   return {
     byId,
     runningIds,
@@ -312,10 +315,11 @@ async function fetchSessionState() {
     ask: items.some((i) => i.pendingInteraction !== undefined),
     current: {
       title: vals.title || '未命名会话',
-      turns: vals.sessionStats?.turns || 0,
-      steps: vals.sessionStats?.steps || 0,
+      turns: ss.turns || 0,
+      steps: ss.steps || 0,
       contextPct: cp && cp.contextWindow ? Math.round(((cp.projectedTokens || 0) * 100) / cp.contextWindow) : 0,
       outputTokens: vals.tokenUsage?.outputTokens || 0,
+      speedTps: decodeMs > 0 ? Math.round((decodeTokens * 1000) / decodeMs) : 0,
     },
   }
 }
@@ -328,16 +332,25 @@ function fmtTokens(n) {
   return String(n)
 }
 
-/** 更新托盘悬停提示：当前会话名 + 状态/进度。 */
+/** 更新托盘悬停提示：两行（状态行 + 指标行）。 */
 function updateTrayTooltip(st, mode) {
   if (!tray) return
   const c = st.current
-  let line2
-  if (mode === 'running') line2 = `▶ 运行中 · 回合 ${c.turns} · 步骤 ${c.steps} · 上下文 ${c.contextPct}% · 输出 ${fmtTokens(c.outputTokens)}`
-  else if (mode === 'ask') line2 = '⏸ 等待你的输入'
-  else if (mode === 'fail') line2 = '✕ 最近一次任务失败'
-  else line2 = '○ 空闲'
-  tray.setToolTip(`${c.title}\n${line2}`)
+  let line1, line2
+  if (mode === 'running') {
+    line1 = `▶ 运行中 · 回合 ${c.turns} · 步骤 ${c.steps}`
+    line2 = `输出速度 ${c.speedTps}/s · 上下文 ${c.contextPct}% · 输出 ${fmtTokens(c.outputTokens)}`
+  } else if (mode === 'ask') {
+    line1 = `⏸ 等待你的输入`
+    line2 = `回合 ${c.turns} · 上下文 ${c.contextPct}% · 输出 ${fmtTokens(c.outputTokens)}`
+  } else if (mode === 'fail') {
+    line1 = `✕ 最近一次任务失败`
+    line2 = `回合 ${c.turns} · 上下文 ${c.contextPct}% · 输出 ${fmtTokens(c.outputTokens)}`
+  } else {
+    line1 = `○ 空闲`
+    line2 = `最近会话 · 回合 ${c.turns} · 输出 ${fmtTokens(c.outputTokens)}`
+  }
+  tray.setToolTip(`${c.title}\n${line1}\n${line2}`)
 }
 
 /** 查一个刚结束的会话：最后一个 turn 的结束原因（'error' | 'completed' | 'aborted' | 'unknown'）。 */
