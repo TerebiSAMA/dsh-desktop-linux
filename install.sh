@@ -216,6 +216,21 @@ else
     done
   fi
 
+  # 如果 Exec 路径含空格（或类似不安全字符），XDG 规范会把 Exec 按空格
+  # 分隔解析，破坏启动。最稳的做法是软链到无空格路径 ~/.local/bin/，
+  # 让 Exec 指向这个链接。
+  if [ -n "$DETECTED_EXEC" ] && [[ "$DETECTED_EXEC" =~ [[:space:]\"\'\\\$\`] ]]; then
+    LINK_DIR="$HOME/.local/bin"
+    LINK_PATH="$LINK_DIR/dsh-desktop-linux"
+    mkdir -p "$LINK_DIR"
+    if [ -L "$LINK_PATH" ] || [ -e "$LINK_PATH" ]; then
+      rm -f "$LINK_PATH"
+    fi
+    ln -s "$DETECTED_EXEC" "$LINK_PATH"
+    ok "原 Exec 路径含空格，已建软链: $LINK_PATH → $DETECTED_EXEC"
+    DETECTED_EXEC="$LINK_PATH"
+  fi
+
   # 准备图标（拷到 ~/.local/share/icons 供桌面环境读取）
   ICON_DIR="$HOME/.local/share/icons"
   ICON_FILE="$ICON_DIR/dsh-desktop-linux.png"
