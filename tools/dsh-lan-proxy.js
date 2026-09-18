@@ -25,6 +25,28 @@ const zlib = require('node:zlib');
 const ALLOWED_REMOTE = (process.env.DSH_ALLOWED_REMOTE || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
+// Optional second source: a newline-separated IP list written by the
+// `dsh-client-ui-lan-allowlist` web plugin (the user edits it in the
+// dsh GUI Settings → LAN access). Loopback still always allowed.
+const ALLOW_FILE = process.env.DSH_ALLOW_FILE || '';
+let ALLOWED_REMOTE_FILE = [];
+function reloadAllowFile() {
+  if (!ALLOW_FILE) { ALLOWED_REMOTE_FILE = []; return; }
+  try {
+    const raw = fs.readFileSync(ALLOW_FILE, 'utf8');
+    ALLOWED_REMOTE_FILE = raw.split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s && !s.startsWith('#'));
+  } catch (err) {
+    // ENOENT just means the user hasn't saved anything yet — silent.
+    if (err.code !== 'ENOENT') {
+      console.error(`[proxy] failed to read ${ALLOW_FILE}: ${err.message}`);
+    }
+    ALLOWED_REMOTE_FILE = [];
+  }
+}
+reloadAllowFile();
+
 function isLoopback(ip) {
   if (!ip) return false;
   if (ip === '::1' || ip === '127.0.0.1') return true;
@@ -35,7 +57,11 @@ function isLoopback(ip) {
 
 function remoteIpAllowed(ip) {
   if (isLoopback(ip)) return true;
-  return ALLOWED_REMOTE.length === 0 || ALLOWED_REMOTE.includes(ip);
+  if (ALLOWED_REMOTE.includes(ip)) return true;
+  if (ALLOWED_REMOTE_FILE.includes(ip)) return true;
+  // Empty both = allow all remote (legacy behaviour, documented in README).
+  if (ALLOWED_REMOTE.length === 0 && ALLOWED_REMOTE_FILE.length === 0) return true;
+  return false;
 }
 
 // Fill in via the systemd unit (Environment=DSH_LAN_HOST=...) or an .env file.
@@ -310,12 +336,22 @@ server.listen(LAN_PORT, '0.0.0.0', () => {
   console.log(`[proxy] dsh-lan-proxy listening on 0.0.0.0:${LAN_PORT}`);
   console.log(`[proxy] upstream=${UPSTREAM}, authority=${AUTH_HOST_HEADER}`);
   console.log(`[proxy] token source: ${TOKEN_FILE || 'env DSH_TOKEN'}`);
-  console.log(`[proxy] remote whitelist: loopback${ALLOWED_REMOTE.length ? ' + ' + ALLOWED_REMOTE.join(', ') : ' (no whitelist — every remote allowed)'}`);
+  if (ALLOW_FILE) {
+    console.log(`[proxy] allow file: ${ALLOW_FILE} (${ALLOWED_REMOTE_FILE.length} entries, watching for changes)`);
+  }
+  const staticList = ALLOWED_REMOTE.length ? ALLOWED_REMOTE.join(', ') : '(none)';
+  console.log(`[proxy] remote whitelist: loopback${ALLOWED_REMOTE.length ? ' + ' + staticList : ' + (file)'}`);
   if (TOKEN_FILE) {
     fs.watchFile(TOKEN_FILE, { interval: 2000 }, () => {
       console.log('[proxy] token file changed; will re-prime on next request');
       cachedCookie = null;
       cachedCookieExpiresAt = 0;
+    });
+  }
+  if (ALLOW_FILE) {
+    fs.watchFile(ALLOW_FILE, { interval: 2000 }, () => {
+      reloadAllowFile();
+      console.log(`[proxy] allow file changed; new whitelist = ${ALLOWED_REMOTE_FILE.join(', ') || '(empty)'}`);
     });
   }
   ensureCookie().catch((err) => {

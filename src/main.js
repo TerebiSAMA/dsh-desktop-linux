@@ -13,7 +13,8 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notificatio
 const { execFile } = require('node:child_process')
 const { createHash, createHmac, randomUUID } = require('node:crypto')
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs')
-const { join } = require('node:path')
+const fs = require('node:fs')
+const { dirname, join } = require('node:path')
 const os = require('node:os')
 const http = require('node:http')
 
@@ -857,6 +858,70 @@ ipcMain.handle('dsh:retry-start', () => {
   })
   return true
 })
+
+// ---------- LAN 代理白名单读写 ----------
+// 文件路径：~/.dsh/profiles/web/dsh-lan-proxy-allow.txt（用户/插件可写位置）
+// 格式：每行一个 IP，# 开头为注释，空行忽略
+const LAN_ALLOW_FILE = join(os.homedir(), '.dsh', 'profiles', 'web', 'dsh-lan-proxy-allow.txt')
+
+// IP 兜底校验：每行清洗后必须是合法 IPv4 / IPv6，否则整体拒绝写入。
+// 前端已经做过校验，这里是最后一道防线（避免恶意 GUI 写入任意内容）。
+function sanitizeAllowlist(raw) {
+  const lines = String(raw || '').split('\n')
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/\d{1,2})?$/
+  const ipv6 = /^[0-9a-fA-F:]+$/
+  const out = []
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) { out.push(trimmed); continue }
+    // IPv4（可选 CIDR）
+    const m4 = trimmed.match(ipv4)
+    if (m4) {
+      const octets = [m4[1], m4[2], m4[3], m4[4]].map(Number)
+      if (octets.every((n) => n >= 0 && n <= 255)) { out.push(trimmed); continue }
+    }
+    // IPv6（粗略）
+    if (trimmed.includes(':') && ipv6.test(trimmed) && trimmed.length <= 64) {
+      out.push(trimmed); continue
+    }
+    // 不合法：直接拒绝
+    throw new Error(`非法条目: ${trimmed}`)
+  }
+  return out.join('\n')
+}
+
+ipcMain.handle('dsh:lan-allowlist-read', async () => {
+  try {
+    const content = await fs.promises.readFile(LAN_ALLOW_FILE, 'utf8')
+    return { ok: true, content, path: LAN_ALLOW_FILE }
+  } catch (e) {
+    if (e.code === 'ENOENT') return { ok: true, content: '', path: LAN_ALLOW_FILE }
+    return { ok: false, error: e.message }
+  }
+})
+
+ipcMain.handle('dsh:lan-allowlist-write', async (_e, payload) => {
+  try {
+    const content = sanitizeAllowlist(payload?.content)
+    await fs.promises.mkdir(dirname(LAN_ALLOW_FILE), { recursive: true })
+    await fs.promises.writeFile(LAN_ALLOW_FILE, content, { mode: 0o644 })
+    return { ok: true, path: LAN_ALLOW_FILE }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+})
+
+ipcMain.handle('dsh:lan-proxy-restart', async () => {
+  // 通过 systemd --user 重启代理；代理每 2s 也会自己 watch 文件，
+  // 即便用户跳过这一步，最终也会生效（最多 2s 延迟）。
+  return new Promise((resolve) => {
+    execFile('systemctl', ['--user', 'restart', 'dsh-lan-proxy.service'], (err, _stdout, stderr) => {
+      if (err) resolve({ ok: false, error: stderr || err.message })
+      else resolve({ ok: true })
+    })
+  })
+})
+
 // 任务状态信号：Web GUI 检测到完成/提问/失败时驱动托盘光条。
 ipcMain.on('dsh:signal', (_e, kind) => {
   if (typeof kind === 'string') traySignal(kind)

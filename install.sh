@@ -228,6 +228,9 @@ if [ "$WITH_LAN_PROXY" = 1 ]; then
       echo "    firewalld: 如果还没给 5080 端口加白名单，建议执行："
       echo "      sudo firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"$LAN_CLIENT\" port port=\"5080\" protocol=\"tcp\" accept'"
       echo "      sudo firewall-cmd --reload"
+      echo ""
+      echo "    设置页里的"LAN 访问 — IP 白名单"分区需要桌面端 v0.2.1+（preload 暴露了"
+      echo "    dshDesktop.lanAllowlist IPC）。如果是新装的桌面端，关闭再重开一次即可。"
     fi
   else
     warn "找不到 tools/dsh-lan-proxy.js（仓库结构不对？），跳过"

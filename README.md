@@ -178,6 +178,38 @@ sudo firewall-cmd --reload
 | `DSH_TOKEN_FILE` | `/run/user/%U/dsh-lan-proxy.env` | token 文件（由 watcher 维护） |
 | `DSH_COOKIE_TTL_MS` | `600000` | cookie 复用窗口（10 分钟） |
 | `DSH_ALLOWED_REMOTE` | `""` | 逗号分隔允许的客户端 IP；空 = 全允许（**务必配置**） |
+| `DSH_ALLOW_FILE` | `""` | 备选白名单文件路径（每行一个 IP），GUI 编辑器用的就是这个 |
+
+### 在 GUI 设置里管理 IP 白名单
+
+仓库里的 `plugins/dsh-client-ui-lan-allowlist/` 是一个 web 客户端插件，
+装上后在 DSH GUI **设置 → "LAN 访问 — IP 白名单"** 分区（位置在"插件商店"
+下方）会出现一个**文本框**：
+
+- 每行一个 IPv4 / IPv6 / CIDR（`#` 开头是注释）
+- "保存"按钮写入 `~/.dsh/profiles/web/dsh-lan-proxy-allow.txt`
+- 代理每 2s 检测这个文件，**保存后 ≤2s 自动生效**，不用重启服务
+- "重启代理"按钮可立即生效（`systemctl --user restart dsh-lan-proxy.service`）
+
+这个白名单和 `DSH_ALLOWED_REMOTE`（systemd 单元硬编码）**叠加**：任一文件
+匹配就放行。GUI 适合日常增删，systemd 变量适合"长期固定"白名单。
+
+**安装**：
+
+```bash
+mkdir -p ~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-lan-allowlist/lib
+cp plugins/dsh-client-ui-lan-allowlist/package.json \
+   ~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-lan-allowlist/
+cp plugins/dsh-client-ui-lan-allowlist/lib/*.js \
+   ~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-lan-allowlist/lib/
+# 在 cordis.patch.yml 追加：
+#   - insert:
+#       - id: ui-lan-allowlist
+#         name: '@deepseek-ai/dsh-client-ui-lan-allowlist'
+```
+
+需要桌面端 v0.2.1+（preload 暴露了 `dshDesktop.lanAllowlist` / `restartLanProxy`
+IPC，老版本会调用失败）。
 
 ### 安全提醒
 

@@ -189,6 +189,42 @@ systemd unit):
 | `DSH_TOKEN_FILE` | `/run/user/%U/dsh-lan-proxy.env` | token file (written by watcher) |
 | `DSH_COOKIE_TTL_MS` | `600000` | cookie reuse window (10 minutes) |
 | `DSH_ALLOWED_REMOTE` | `""` | comma-separated client IP whitelist; empty = allow all |
+| `DSH_ALLOW_FILE` | `""` | alternative whitelist file path (newline-separated IPs); the GUI editor below writes to this |
+
+### Editing the IP allowlist from the GUI
+
+`plugins/dsh-client-ui-lan-allowlist/` is a DSH web client plugin that
+adds a **Settings → "LAN access — IP allowlist"** section (right under the
+Plugin Store). The section has a textarea where you can list IPs:
+
+- One IPv4 / IPv6 / CIDR per line (`#` starts a comment)
+- **Save** writes to `~/.dsh/profiles/web/dsh-lan-proxy-allow.txt`
+- The proxy `fs.watchFile`s that file every 2s — **takes effect automatically,
+  no service restart needed**
+- The **Restart proxy** button is the optional immediate flush
+  (`systemctl --user restart dsh-lan-proxy.service`)
+
+This GUI-managed list is **additive** with `DSH_ALLOWED_REMOTE` (the systemd
+hardcoded list) — either one matching lets the client through. Use the GUI
+for day-to-day edits; use the systemd variable for "always allowed" anchors.
+
+**Install**:
+
+```bash
+mkdir -p ~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-lan-allowlist/lib
+cp plugins/dsh-client-ui-lan-allowlist/package.json \
+   ~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-lan-allowlist/
+cp plugins/dsh-client-ui-lan-allowlist/lib/*.js \
+   ~/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-client-ui-lan-allowlist/lib/
+# In cordis.patch.yml:
+#   - insert:
+#       - id: ui-lan-allowlist
+#         name: '@deepseek-ai/dsh-client-ui-lan-allowlist'
+```
+
+Requires desktop client v0.2.1+ (preload exposes `dshDesktop.lanAllowlist`
+and `dshDesktop.restartLanProxy`; older builds will fail silently when the
+plugin calls them).
 
 ### Security caveats
 

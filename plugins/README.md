@@ -9,9 +9,10 @@ DSH Web GUI 客户端插件的**参考备份**——这些不是 Electron 桌面
 
 ## 已收录的插件
 
-| 名称 | 作用 |
-|---|---|
-| `dsh-client-ui-center-align/` | 修复侧边栏图标 vs 文字的视觉错位（顶部 brand + 新会话/设置按钮） |
+| 名称 | 作用 | 需要桌面端 |
+|---|---|---|
+| `dsh-client-ui-center-align/` | 修复侧边栏图标 vs 文字的视觉错位（顶部 brand + 新会话/设置按钮） | 否 |
+| `dsh-client-ui-lan-allowlist/` | 设置页"插件商店下方"加 IP 白名单编辑器，控制 dsh-lan-proxy 的 `DSH_ALLOW_FILE` | **是** |
 
 ## 安装方法
 

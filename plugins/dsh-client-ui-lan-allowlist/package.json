@@ -1,0 +1,16 @@
+{
+  "name": "@deepseek-ai/dsh-client-ui-lan-allowlist",
+  "description": "LAN access IP allowlist editor: adds a Settings section under the Plugin Store that lets the user edit the dsh-lan-proxy IP whitelist. Saves to a file the proxy watches.",
+  "version": "0.1.0",
+  "publishConfig": { "access": "public" },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": { "default": "./package.json" }
+  },
+  "dsh": { "client": { "platform": "web" } },
+  "license": "MIT",
+  "files": ["lib/index.js", "lib/client.js"]
+}

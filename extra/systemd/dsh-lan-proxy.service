@@ -10,10 +10,15 @@ Environment=DSH_LAN_HOST=<LAN_IP>
 Environment=DSH_LAN_PORT=5080
 Environment=DSH_UPSTREAM=http://127.0.0.1:3080
 Environment=DSH_TOKEN_FILE=/run/user/%U/dsh-lan-proxy.env
-# Comma-separated whitelist of remote IPs allowed through. Loopback is
-# always allowed. Empty allows every remote address.
+# Comma-separated whitelist of allowed remote IPs allowed through. Loopback
+# is always allowed. Empty allows every remote address.
 # FILL IN: the IP(s) of machines that should reach the LAN endpoint.
 Environment=DSH_ALLOWED_REMOTE=<CLIENT_IP>
+# Optional second whitelist source: a newline-separated IP list edited from
+# the dsh GUI Settings → LAN access (dsh-client-ui-lan-allowlist plugin).
+# The proxy watches this file every 2s, so GUI edits take effect without
+# restarting the service. Leave unset to disable the file-based list.
+Environment=DSH_ALLOW_FILE=%h/.dsh/profiles/web/dsh-lan-proxy-allow.txt
 ExecStart=/usr/bin/env node /usr/local/lib/dsh-desktop-linux/dsh-lan-proxy.js
 Restart=always
 RestartSec=3
