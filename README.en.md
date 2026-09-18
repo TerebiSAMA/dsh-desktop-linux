@@ -16,6 +16,28 @@ Web GUI (`http://127.0.0.1:3080`). It gives you:
 - 🔐 Self-signed cookie auth — no token to copy
 - 🔄 Auto-update via GitHub Releases
 
+## One-line install (recommended)
+
+One command sets up everything: DSH backend + GUI client plugins + optional
+systemd watchdog + optional XDG autostart + first-run credentials.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TerebiSAMA/dsh-desktop-linux/main/install.sh | bash -s -- --with-systemd
+```
+
+Flags:
+
+| flag | what it does |
+|---|---|
+| `--with-systemd` | install + enable systemd user unit (DSH Web watchdog with auto-restart) |
+| `--with-autostart` | install XDG autostart entry (boot into the desktop client) |
+| `--no-launch` | don't auto-start `dsh web` after install |
+
+After it finishes, launch the desktop client via whichever package you grabbed
+(double-click the icon / `./DSH-Desktop-*.AppImage` / `sudo dnf install ./...rpm`
+— see the **Install** section below). The script is idempotent — re-running it
+won't clobber existing config.
+
 ## Startup flow (zero-config)
 
 After a double-click, the desktop client walks through this state machine automatically:
@@ -111,12 +133,16 @@ src/
   preload.js       # context-isolated IPC bridge
   error.html       # fallback when the Web service is unreachable
 assets/
-  *.png           # app icon + tray state frames
+  *.png            # app icon + tray state frames
+tools/
+  gen-tray-assets.py  # tray frame generator (skin x state x DPI)
+plugins/           # DSH GUI client plugin backups (not desktop code)
+install.sh         # one-line installer (backend + plugins + systemd + autostart)
 .github/workflows/
-  release.yml     # build AppImage / deb / rpm
+  release.yml      # build AppImage / deb / rpm
 extra/
-  systemd/        # systemd user unit template (optional)
-  autostart/      # XDG autostart template (optional)
+  systemd/         # systemd user unit template (optional)
+  autostart/       # XDG autostart template (optional)
 ```
 
 ## FAQ

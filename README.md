@@ -17,6 +17,27 @@ Web GUI 的 Electron 桌面壳。它把 DSH Web 服务 (`http://127.0.0.1:3080`)
 - 🔐 自动认证：免 token 打开 DSH Web（自签名 cookie）
 - 🔄 自动更新：检测 GitHub Releases 后台静默升级
 
+## 一键安装（推荐）
+
+一行命令装好所有依赖（DSH 后端 + GUI 客户端插件 + 可选 systemd 守护
++ 可选开机自启 + 首次启动落 credentials）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TerebiSAMA/dsh-desktop-linux/main/install.sh | bash -s -- --with-systemd
+```
+
+可选 flag：
+
+| flag | 作用 |
+|---|---|
+| `--with-systemd` | 安装并启用 systemd 用户单元（DSH Web 后台守护 + 失败自动重启） |
+| `--with-autostart` | 安装 XDG autostart（开机启动桌面端） |
+| `--no-launch` | 不自动启动 dsh web（自己控制时机） |
+
+跑完后用对应的方式启动桌面端（双击图标 / `./DSH-Desktop-*.AppImage`
+/ `sudo dnf install ./...rpm` —— 见下文"安装"章节）。脚本可以重复跑，
+每一步都做幂等检查，不会重复覆盖。
+
 ## 启动流程（傻瓜式）
 
 双击图标后，桌面端会按下面顺序自动把一切准备好：
@@ -105,12 +126,16 @@ src/
   preload.js       # 渲染进程桥（白名单 IPC）
   error.html       # 服务失联时的兜底页
 assets/
-  *.png           # 应用图标 + 托盘各状态帧
+  *.png            # 应用图标 + 托盘各状态帧
+tools/
+  gen-tray-assets.py  # 托盘图标生成脚本（蓝/黑/白 × 状态 × DPI）
+plugins/           # DSH GUI 客户端插件备份（非桌面端代码，仅作参考/重装）
+install.sh         # 一键安装脚本（后端 + 插件 + systemd + autostart）
 .github/workflows/
-  release.yml     # 出 AppImage / deb / rpm
+  release.yml      # 出 AppImage / deb / rpm
 extra/
-  systemd/        # 用户级 systemd 单元模板（可选）
-  autostart/      # XDG autostart 模板（可选）
+  systemd/         # 用户级 systemd 单元模板（可选）
+  autostart/       # XDG autostart 模板（可选）
 ```
 
 ## 常见问题
